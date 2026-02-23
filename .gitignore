@@ -7,3 +7,4 @@
 out/
 sst-classifier.pt
 cfimdb-classifier.pt
+10-1e-05-paraphrase.pt
