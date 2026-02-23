@@ -407,6 +407,7 @@ if __name__ == "__main__":
   )
 
   train(config)
+  print("just to test")
 
   print('Evaluating on cfimdb...')
   test(config)
