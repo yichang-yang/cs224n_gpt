@@ -31,19 +31,51 @@ class AdamW(Optimizer):
         if closure is not None:
             loss = closure()
 
+
         for group in self.param_groups:
+            # print(group.keys())
             for p in group["params"]:
                 if p.grad is None:
                     continue
                 grad = p.grad.data
                 if grad.is_sparse:
                     raise RuntimeError("Adam does not support sparse gradients, please consider SparseAdam instead")
-
                 # State should be stored in this dictionary.
                 state = self.state[p]
+                if len(state) == 0:
+                    state["step"] = 0  
+                    state["m_t"] = torch.zeros_like(p.data) 
+                    state["v_t"] = torch.zeros_like(p.data)  
+                
+                state["step"] += 1
+
+                t = state["step"]
+                m = state["m_t"]
+                v = state["v_t"]
+
 
                 # Access hyperparameters from the `group` dictionary.
                 alpha = group["lr"]
+                beta_1, beta_2 = group["betas"]
+                eps = group["eps"]
+                weight_decay = group['weight_decay']
+
+                # calculation
+                m_t = beta_1 * m + (1 - beta_1) * grad
+                v_t = beta_2 * v + (1 - beta_2) * grad * grad
+
+                if group["correct_bias"]:
+                    alpha_t = alpha * ((1 - (beta_2 ** t)) ** 0.5) / (1 - (beta_1 ** t))
+                else:
+                    alpha_t = alpha
+
+                p.data.addcdiv_(m_t, v_t.sqrt().add_(eps), value = -alpha_t)  
+
+                p.data *= (1 - alpha * weight_decay)
+
+                state["m_t"] = m_t
+                state["v_t"] = v_t
+
 
 
                 ### TODO: Complete the implementation of AdamW here, reading and saving
@@ -61,7 +93,9 @@ class AdamW(Optimizer):
                 ###
                 ###       Refer to the default project handout for more details.
                 ### YOUR CODE HERE
-                raise NotImplementedError
+
+
+                
 
 
         return loss

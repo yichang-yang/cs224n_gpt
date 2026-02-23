@@ -55,7 +55,7 @@ class GPT2SentimentClassifier(torch.nn.Module):
 
     ### TODO: Create any instance variables you need to classify the sentiment of BERT embeddings.
     ### YOUR CODE HERE
-    raise NotImplementedError
+    self.classifier = torch.nn.Linear(config.hidden_size, config.num_labels)
 
 
   def forward(self, input_ids, attention_mask):
@@ -65,8 +65,12 @@ class GPT2SentimentClassifier(torch.nn.Module):
     ###       HINT: You should consider what is an appropriate return value given that
     ###       the training loop currently uses F.cross_entropy as the loss function.
     ### YOUR CODE HERE
-    raise NotImplementedError
 
+    #input_ids [8, 44]
+    outputs = self.gpt(input_ids, attention_mask)
+    last_token = outputs['last_token'] 
+
+    return self.classifier(last_token)
 
 
 class SentimentDataset(Dataset):
@@ -365,26 +369,26 @@ if __name__ == "__main__":
   args = get_args()
   seed_everything(args.seed)
 
-  print('Training Sentiment Classifier on SST...')
-  config = SimpleNamespace(
-    filepath='sst-classifier.pt',
-    lr=args.lr,
-    use_gpu=args.use_gpu,
-    epochs=args.epochs,
-    batch_size=args.batch_size,
-    hidden_dropout_prob=args.hidden_dropout_prob,
-    train='data/ids-sst-train.csv',
-    dev='data/ids-sst-dev.csv',
-    test='data/ids-sst-test-student.csv',
-    fine_tune_mode=args.fine_tune_mode,
-    dev_out='predictions/' + args.fine_tune_mode + '-sst-dev-out.csv',
-    test_out='predictions/' + args.fine_tune_mode + '-sst-test-out.csv'
-  )
+  # print('Training Sentiment Classifier on SST...')
+  # config = SimpleNamespace(
+  #   filepath='sst-classifier.pt',
+  #   lr=args.lr,
+  #   use_gpu=args.use_gpu,
+  #   epochs=args.epochs,
+  #   batch_size=args.batch_size,
+  #   hidden_dropout_prob=args.hidden_dropout_prob,
+  #   train='data/ids-sst-train.csv',
+  #   dev='data/ids-sst-dev.csv',
+  #   test='data/ids-sst-test-student.csv',
+  #   fine_tune_mode=args.fine_tune_mode,
+  #   dev_out='predictions/' + args.fine_tune_mode + '-sst-dev-out.csv',
+  #   test_out='predictions/' + args.fine_tune_mode + '-sst-test-out.csv'
+  # )
 
-  train(config)
+  # train(config)
 
-  print('Evaluating on SST...')
-  test(config)
+  # print('Evaluating on SST...')
+  # test(config)
 
   print('Training Sentiment Classifier on cfimdb...')
   config = SimpleNamespace(

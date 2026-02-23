@@ -5,3 +5,5 @@
 *.pkl
 .idea/
 out/
+sst-classifier.pt
+cfimdb-classifier.pt
