@@ -54,11 +54,23 @@ class ParaphraseDetectionDataset(Dataset):
     token_ids = torch.LongTensor(encoding['input_ids'])
     attention_mask = torch.LongTensor(encoding['attention_mask'])
 
+    enc_sent_1 = self.tokenizer(sent1, return_tensors='pt', padding=True, truncation=True)
+    enc_sent_2 = self.tokenizer(sent2, return_tensors='pt', padding=True, truncation=True)
+    token_ids_s1 = torch.LongTensor(enc_sent_1['input_ids'])
+    token_ids_s2 = torch.LongTensor(enc_sent_2['input_ids'])
+    attention_mask_s1 = torch.LongTensor(enc_sent_1['attention_mask'])
+    attention_mask_s2 = torch.LongTensor(enc_sent_2['attention_mask'])
+
+
     batched_data = {
       'token_ids': token_ids,
       'attention_mask': attention_mask,
       'labels': labels,
-      'sent_ids': sent_ids
+      'sent_ids': sent_ids,
+      'token_ids_s1': token_ids_s1,
+      'attention_mask_s1': attention_mask_s1,
+      'token_ids_s2': token_ids_s2,
+      'attention_mask_s2': attention_mask_s2
     }
 
     return batched_data

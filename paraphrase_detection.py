@@ -54,8 +54,12 @@ class ParaphraseGPT(nn.Module):
     # self.paraphrase_detection_head = nn.Linear(args.d, 2)  # Paraphrase detection has two outputs: 1 (yes) or 0 (no).
 
     # By default, fine-tune the full model.
-    for param in self.gpt.parameters():
-      param.requires_grad = True
+    # for param in self.gpt.parameters():
+    #   param.requires_grad = True
+    
+    for idx, layer in enumerate(self.gpt.gpt_layers):
+      for param in layer.parameters():
+        param.requires_grad = (idx >= 18)
 
   def forward(self, input_ids, attention_mask):
     """
@@ -132,7 +136,14 @@ def train(args):
       optimizer.zero_grad()
       logits = model(b_ids, b_mask)
       preds = torch.argmax(logits, dim=1)
-      loss = F.cross_entropy(logits, labels, reduction='mean')
+      loss = F.cross_entropy(logits, labels, reduction='mean', label_smoothing=0.1)
+
+      # Contrastive loss
+      emb1 = model.gpt(batch['token_ids_s1'].to(device), batch['attention_mask_s1'].to(device))['last_token']
+      emb2 = model.gpt(batch['token_ids_s2'].to(device), batch['attention_mask_s2'].to(device))['last_token']
+      cosine_sim = F.cosine_similarity(emb1, emb2)
+      contrastive_loss = F.mse_loss(cosine_sim, (2 * labels.float() - 1))  # paraphrase is 1, non-paraphrase is -1
+      loss = loss + 0.1 * contrastive_loss
       loss.backward()
       optimizer.step()
 
