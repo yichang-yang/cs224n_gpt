@@ -145,11 +145,12 @@ def train(args):
       loss = F.cross_entropy(logits, labels, reduction='mean', label_smoothing=0.1)
 
       # Contrastive loss
-      emb1 = model.gpt(batch['token_ids_s1'].to(device), batch['attention_mask_s1'].to(device))['last_token']
-      emb2 = model.gpt(batch['token_ids_s2'].to(device), batch['attention_mask_s2'].to(device))['last_token']
-      cosine_sim = F.cosine_similarity(emb1, emb2)
-      contrastive_loss = F.mse_loss(cosine_sim, (2 * labels.float() - 1))  # paraphrase is 1, non-paraphrase is -1
-      loss = loss + 0.1 * contrastive_loss
+      # emb1 = model.gpt(batch['token_ids_s1'].to(device), batch['attention_mask_s1'].to(device))['last_token']
+      # emb2 = model.gpt(batch['token_ids_s2'].to(device), batch['attention_mask_s2'].to(device))['last_token']
+      # cosine_sim = F.cosine_similarity(emb1, emb2)
+      # contrastive_loss = F.mse_loss(cosine_sim, (2 * labels.float() - 1))  # paraphrase is 1, non-paraphrase is -1
+      # loss = loss + 0.1 * contrastive_loss
+      
       loss.backward()
       optimizer.step()
 
@@ -160,9 +161,9 @@ def train(args):
 
     dev_acc, dev_f1, *_ = model_eval_paraphrase(para_dev_dataloader, model, device)
 
-    trainable = sum(p.numel() for p in model.parameters() if p.requires_grad)
-    total = sum(p.numel() for p in model.parameters())
-    print(f"Trainable: {trainable:,} / {total:,} ({100*trainable/total:.2f}%)")
+    # trainable = sum(p.numel() for p in model.parameters() if p.requires_grad)
+    # total = sum(p.numel() for p in model.parameters())
+    # print(f"Trainable: {trainable:,} / {total:,} ({100*trainable/total:.2f}%)")
 
     if dev_acc > best_dev_acc:
       best_dev_acc = dev_acc

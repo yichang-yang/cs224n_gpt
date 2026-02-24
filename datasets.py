@@ -47,19 +47,19 @@ class ParaphraseDetectionDataset(Dataset):
     # labels = self.tokenizer(labels, return_tensors='pt', padding=True, truncation=True)['input_ids']
     sent_ids = [x[3] for x in all_data]
 
-    cloze_style_sents = [f'Question 1: "{s1}"\nQuestion 2: "{s2}\nAre these questions asking the same thing?\n' for
-                         (s1, s2) in zip(sent1, sent2)]
+    cloze_style_sents = [f'Is "{s1}" a paraphrase of "{s2}"? Answer "yes" or "no": ' for (s1, s2) in
+                         zip(sent1, sent2)]
     encoding = self.tokenizer(cloze_style_sents, return_tensors='pt', padding=True, truncation=True)
 
     token_ids = torch.LongTensor(encoding['input_ids'])
     attention_mask = torch.LongTensor(encoding['attention_mask'])
 
-    enc_sent_1 = self.tokenizer(sent1, return_tensors='pt', padding=True, truncation=True)
-    enc_sent_2 = self.tokenizer(sent2, return_tensors='pt', padding=True, truncation=True)
-    token_ids_s1 = torch.LongTensor(enc_sent_1['input_ids'])
-    token_ids_s2 = torch.LongTensor(enc_sent_2['input_ids'])
-    attention_mask_s1 = torch.LongTensor(enc_sent_1['attention_mask'])
-    attention_mask_s2 = torch.LongTensor(enc_sent_2['attention_mask'])
+    # enc_sent_1 = self.tokenizer(sent1, return_tensors='pt', padding=True, truncation=True)
+    # enc_sent_2 = self.tokenizer(sent2, return_tensors='pt', padding=True, truncation=True)
+    # token_ids_s1 = torch.LongTensor(enc_sent_1['input_ids'])
+    # token_ids_s2 = torch.LongTensor(enc_sent_2['input_ids'])
+    # attention_mask_s1 = torch.LongTensor(enc_sent_1['attention_mask'])
+    # attention_mask_s2 = torch.LongTensor(enc_sent_2['attention_mask'])
 
 
     batched_data = {
@@ -67,10 +67,10 @@ class ParaphraseDetectionDataset(Dataset):
       'attention_mask': attention_mask,
       'labels': labels,
       'sent_ids': sent_ids,
-      'token_ids_s1': token_ids_s1,
-      'attention_mask_s1': attention_mask_s1,
-      'token_ids_s2': token_ids_s2,
-      'attention_mask_s2': attention_mask_s2
+      # 'token_ids_s1': token_ids_s1,
+      # 'attention_mask_s1': attention_mask_s1,
+      # 'token_ids_s2': token_ids_s2,
+      # 'attention_mask_s2': attention_mask_s2
     }
 
     return batched_data
