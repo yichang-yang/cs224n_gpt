@@ -29,6 +29,7 @@ from datasets import (
 )
 from evaluation import model_eval_paraphrase, model_test_paraphrase
 from models.gpt2 import GPT2Model
+from modules.attention import LoraLayer
 
 from optimizer import AdamW
 
@@ -54,12 +55,17 @@ class ParaphraseGPT(nn.Module):
     # self.paraphrase_detection_head = nn.Linear(args.d, 2)  # Paraphrase detection has two outputs: 1 (yes) or 0 (no).
 
     # By default, fine-tune the full model.
-    # for param in self.gpt.parameters():
-    #   param.requires_grad = True
+    for param in self.gpt.parameters():
+      param.requires_grad = False
     
-    for idx, layer in enumerate(self.gpt.gpt_layers):
-      for param in layer.parameters():
-        param.requires_grad = (idx >= 18)
+    # for idx, layer in enumerate(self.gpt.gpt_layers):
+    #   for param in layer.parameters():
+    #     param.requires_grad = (idx >= 18)
+
+    for layer in self.gpt.gpt_layers:
+      attn = layer.self_attention
+      attn.query = LoraLayer(attn.query, alpha = 16, rank = 8)
+      attn.value = LoraLayer(attn.value, alpha = 16, rank = 8)
 
   def forward(self, input_ids, attention_mask):
     """
@@ -153,6 +159,10 @@ def train(args):
     train_loss = train_loss / num_batches
 
     dev_acc, dev_f1, *_ = model_eval_paraphrase(para_dev_dataloader, model, device)
+
+    trainable = sum(p.numel() for p in model.parameters() if p.requires_grad)
+    total = sum(p.numel() for p in model.parameters())
+    print(f"Trainable: {trainable:,} / {total:,} ({100*trainable/total:.2f}%)")
 
     if dev_acc > best_dev_acc:
       best_dev_acc = dev_acc
