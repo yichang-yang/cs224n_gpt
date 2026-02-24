@@ -7,6 +7,8 @@ Running:
 trains your SonnetGPT model and writes the required submission files.
 '''
 
+# Testing JC's edits!!
+
 import argparse
 import random
 import torch
