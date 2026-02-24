@@ -56,16 +56,16 @@ class ParaphraseGPT(nn.Module):
 
     # By default, fine-tune the full model.
     for param in self.gpt.parameters():
-      param.requires_grad = True
+      param.requires_grad = False
     
-    for idx, layer in enumerate(self.gpt.gpt_layers):
-      for param in layer.parameters():
-        param.requires_grad = (idx >= 9)
+    # for idx, layer in enumerate(self.gpt.gpt_layers):
+    #   for param in layer.parameters():
+    #     param.requires_grad = (idx >= 18)
 
-    # for layer in self.gpt.gpt_layers:
-    #   attn = layer.self_attention
-    #   attn.query = LoraLayer(attn.query, alpha = 16, rank = 8)
-    #   attn.value = LoraLayer(attn.value, alpha = 16, rank = 8)
+    for layer in self.gpt.gpt_layers:
+      attn = layer.self_attention
+      attn.query = LoraLayer(attn.query, alpha = 16, rank = 8)
+      attn.value = LoraLayer(attn.value, alpha = 16, rank = 8)
 
   def forward(self, input_ids, attention_mask):
     """
@@ -150,7 +150,6 @@ def train(args):
       # cosine_sim = F.cosine_similarity(emb1, emb2)
       # contrastive_loss = F.mse_loss(cosine_sim, (2 * labels.float() - 1))  # paraphrase is 1, non-paraphrase is -1
       # loss = loss + 0.1 * contrastive_loss
-
       loss.backward()
       optimizer.step()
 
