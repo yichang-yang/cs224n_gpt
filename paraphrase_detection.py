@@ -10,7 +10,7 @@ Running:
   `python paraphrase_detection.py --use_gpu`
 trains and evaluates your ParaphraseGPT model and writes the required submission files.
 '''
-
+import os
 import argparse
 import random
 import torch
@@ -121,6 +121,13 @@ def train(args):
   args = add_arguments(args)
   model = ParaphraseGPT(args)
   model = model.to(device)
+
+  checkpoint_path = '/content/cs224n_gpt/10-1e-05-paraphrase.pt'
+  if os.path.exists(checkpoint_path):
+      print(f"Loading checkpoint from {checkpoint_path}")
+      saved = torch.load(checkpoint_path, weights_only=False)
+      model.load_state_dict(saved['model'])
+      print("Checkpoint loaded, continuing training")
 
   lr = args.lr
   optimizer = AdamW(model.parameters(), lr=lr, weight_decay=0.01)
