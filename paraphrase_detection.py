@@ -62,7 +62,7 @@ class ParaphraseGPT(nn.Module):
     #   for param in layer.parameters():
     #     param.requires_grad = (idx >= 18)
 
-    for layer in self.gpt.gpt_layers[-12:]:
+    for layer in self.gpt.gpt_layers[-8:]:
       attn = layer.self_attention
       attn.query = LoraLayer(attn.query, alpha = 32, rank = 32)
       attn.value = LoraLayer(attn.value, alpha = 32, rank = 32)
