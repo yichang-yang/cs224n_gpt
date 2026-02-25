@@ -32,8 +32,6 @@ from models.gpt2 import GPT2Model
 from modules.attention import LoraLayer
 
 from optimizer import AdamW
-from torch.cuda.amp import autocast, GradScaler
-scaler = GradScaler()
 
 TQDM_DISABLE = False
 
@@ -139,6 +137,7 @@ def train(args):
   )
   
   best_dev_acc = 0
+  epochs_without_improvement = 0
 
   # Run for the specified number of epochs.
   for epoch in range(args.epochs):
@@ -154,24 +153,18 @@ def train(args):
 
       # Compute the loss, gradients, and update the model's parameters.
       optimizer.zero_grad()
-      #logits = model(b_ids, b_mask)
-      #loss = F.cross_entropy(logits, labels, reduction='mean', label_smoothing=0.1)
-
+      logits = model(b_ids, b_mask)
+      loss = F.cross_entropy(logits, labels, reduction='mean', label_smoothing=0.1)
+      loss.backward()
+      torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+      optimizer.step()
+      scheduler.step()
       # Contrastive loss
       # emb1 = model.gpt(batch['token_ids_s1'].to(device), batch['attention_mask_s1'].to(device))['last_token']
       # emb2 = model.gpt(batch['token_ids_s2'].to(device), batch['attention_mask_s2'].to(device))['last_token']
       # cosine_sim = F.cosine_similarity(emb1, emb2)
       # contrastive_loss = F.mse_loss(cosine_sim, (2 * labels.float() - 1))  # paraphrase is 1, non-paraphrase is -1
       # loss = loss + 0.1 * contrastive_loss
-      with autocast():
-          logits = model(b_ids, b_mask)
-          loss = F.cross_entropy(logits, labels, reduction='mean', label_smoothing=0.1)
-
-      scaler.scale(loss).backward()
-      torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
-      scaler.step(optimizer)
-      scaler.update()
-      scheduler.step()
 
       train_loss += loss.item()
       num_batches += 1
@@ -183,7 +176,8 @@ def train(args):
     # trainable = sum(p.numel() for p in model.parameters() if p.requires_grad)
     # total = sum(p.numel() for p in model.parameters())
     # print(f"Trainable: {trainable:,} / {total:,} ({100*trainable/total:.2f}%)")
-
+    
+    
     if dev_acc > best_dev_acc:
         best_dev_acc = dev_acc
         epochs_without_improvement = 0
