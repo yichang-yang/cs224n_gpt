@@ -133,15 +133,15 @@ def train(args):
   optimizer = AdamW(model.parameters(), lr=lr, weight_decay=0.01)
 
   # Add scheduler
-  total_steps = len(para_train_dataloader) * args.epochs
-  warmup_steps = total_steps // 10  # 10% warmup
+  # total_steps = len(para_train_dataloader) * args.epochs
+  # warmup_steps = total_steps // 10  # 10% warmup
     
-  from transformers import get_linear_schedule_with_warmup
-  scheduler = get_linear_schedule_with_warmup(
-      optimizer,
-      num_warmup_steps=warmup_steps,
-      num_training_steps=total_steps
-  )
+  # from transformers import get_linear_schedule_with_warmup
+  # scheduler = get_linear_schedule_with_warmup(
+  #     optimizer,
+  #     num_warmup_steps=warmup_steps,
+  #     num_training_steps=total_steps
+  # )
   
   best_dev_acc = 0
   epochs_without_improvement = 0
@@ -161,11 +161,11 @@ def train(args):
       # Compute the loss, gradients, and update the model's parameters.
       optimizer.zero_grad()
       logits = model(b_ids, b_mask)
-      loss = F.cross_entropy(logits, labels, reduction='mean', label_smoothing=0.1)
+      loss = F.cross_entropy(logits, labels, reduction='mean', label_smoothing=0)
       loss.backward()
       torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
       optimizer.step()
-      scheduler.step()
+      # scheduler.step()
       # Contrastive loss
       # emb1 = model.gpt(batch['token_ids_s1'].to(device), batch['attention_mask_s1'].to(device))['last_token']
       # emb2 = model.gpt(batch['token_ids_s2'].to(device), batch['attention_mask_s2'].to(device))['last_token']
