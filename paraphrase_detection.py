@@ -122,7 +122,7 @@ def train(args):
   model = ParaphraseGPT(args)
   model = model.to(device)
 
-  checkpoint_path = '/content/drive/MyDrive/224n_v1/cs224n_gpt/10-1e-05-paraphrase.pt'
+  checkpoint_path = '/content/drive/MyDrive/224n/cs224n_gpt/10-1e-05-paraphrase.pt'
   if os.path.exists(checkpoint_path):
       print(f"Loading checkpoint from {checkpoint_path}")
       saved = torch.load(checkpoint_path, weights_only=False)
