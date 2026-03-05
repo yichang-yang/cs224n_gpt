@@ -150,7 +150,7 @@ class SonnetsDataset(Dataset):
 
     # Split sonnets based on numbering pattern (e.g., "\n\n1\n\n")
     sonnets = re.split(r'\n\s*\d+\s*\n', text)[1:]  # Remove header text
-
+    # print([s.strip() for s in sonnets])
     # Strip leading/trailing spaces
     return [s.strip() for s in sonnets]
 

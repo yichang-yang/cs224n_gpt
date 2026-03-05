@@ -58,9 +58,6 @@ class GPT2Model(GPTPreTrainedModel):
     return ans
 
 
-    ### TODO: Use pos_ids to get position embedding from self.pos_embedding into pos_embeds.
-    ###       Then, add two embeddings together; then apply dropout and return.
-    ### YOUR CODE HERE
 
 
   def encode(self, hidden_states, attention_mask):
@@ -109,7 +106,9 @@ class GPT2Model(GPTPreTrainedModel):
     #hidden: [8, 768] word_embedding[50257, 768]
     ans = torch.matmul(hidden_state, self.word_embedding.weight.T)
   
-    return ans[:, [3919, 8505]]
+    # return ans[:, [3919, 8505]]
+
+    return ans
     
 
 
