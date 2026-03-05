@@ -478,8 +478,8 @@ def train_dpo(args):
 @torch.no_grad()
 def generate_submission_sonnets(args):
   device = torch.device('cuda') if args.use_gpu else torch.device('cpu')
-  #saved = torch.load(f'best_dpo-{args.filepath}', weights_only=False)
-  saved = torch.load('best_dpo_10-1e-05-sonnet.pt', weights_only=False)
+  saved = torch.load(f'best_{args.filepath}', weights_only=False)
+  #saved = torch.load('best_dpo_10-1e-05-sonnet.pt', weights_only=False)
 
   model_args = saved['args']
   if not hasattr(model_args, 'd'):
@@ -496,7 +496,7 @@ def generate_submission_sonnets(args):
   for batch in held_out_sonnet_dataset:
     sonnet_id = batch[0]
     encoding = model.tokenizer(batch[1], return_tensors='pt', padding=False, truncation=True).to(device)
-    _, decoded_output = model.generate_beam(encoding['input_ids'], temperature=args.temperature)
+    _, decoded_output = model.generate(encoding['input_ids'], temperature=args.temperature)
     full_sonnet = f'{decoded_output}\n\n'
     generated_sonnets.append((sonnet_id, full_sonnet))
 
@@ -512,8 +512,8 @@ def generate_submission_sonnets(args):
 def get_args():
   parser = argparse.ArgumentParser()
 
-  parser.add_argument("--sonnet_path", type=str, default="data/sonnets_single.txt")
-  parser.add_argument("--held_out_sonnet_path", type=str, default="data/sonnets_held_out_single.txt")
+  parser.add_argument("--sonnet_path", type=str, default="data/sonnets.txt")
+  parser.add_argument("--held_out_sonnet_path", type=str, default="data/sonnets_held_out.txt")
   parser.add_argument("--held_out_sonnet_dev_path", type=str, default="data/sonnets_held_out_dev.txt")
   parser.add_argument("--true_sonnet_dev_path", type=str, default="data/TRUE_sonnets_held_out_dev.txt")
   parser.add_argument("--sonnet_out", type=str, default="predictions/generated_sonnets.txt")
