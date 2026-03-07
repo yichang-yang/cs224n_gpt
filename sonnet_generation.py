@@ -64,8 +64,7 @@ class SonnetGPT(nn.Module):
     """
     ### YOUR CODE HERE
     outputs = self.gpt(input_ids, attention_mask)
-    logits = outputs @ self.gpt.word_embedding.weight.T
-    return logits
+    return self.gpt.hidden_state_to_token(outputs['last_hidden_state']) # everything
 
 
   def get_device(self):
