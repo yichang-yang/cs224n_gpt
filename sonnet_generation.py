@@ -82,7 +82,7 @@ class SonnetGPT(nn.Module):
 
         # Repetition penalty
         for token_id in set(token_ids[0].tolist()):
-            logits_last_token[0, token_id] /= 1.3
+            logits_last_token[0, token_id] /= 1.7
 
         probs = torch.nn.functional.softmax(logits_last_token, dim=-1)
 
@@ -240,7 +240,7 @@ def get_args():
   parser.add_argument("--use_gpu", action='store_true')
 
   # Generation parameters.
-  parser.add_argument("--temperature", type=float, help="softmax temperature.", default=1.2)
+  parser.add_argument("--temperature", type=float, help="softmax temperature.", default=0.7)
   parser.add_argument("--top_p", type=float, help="Cumulative probability distribution for nucleus sampling.",
                       default=0.9)
 
