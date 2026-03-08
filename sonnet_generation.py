@@ -75,48 +75,28 @@ class SonnetGPT(nn.Module):
   def generate(self, encoding, temperature=0.7, top_p=0.9, max_length=300):
     token_ids = encoding.to(self.get_device())
     attention_mask = torch.ones(token_ids.shape, dtype=torch.int64).to(self.get_device())
-    
-    newline_token = 198  # GPT-2's actual newline token
-
-    # count how many lines are already in the prompt
-    prompt_text = self.tokenizer.decode(token_ids[0])
-    lines_so_far = prompt_text.count('\n')
-
-    # sonnet structure: lines per stanza
-    stanza_breaks = [4, 8, 12, 14]
 
     for _ in range(max_length):
         logits_sequence = self.forward(token_ids, attention_mask)
         logits_last_token = logits_sequence[:, -1, :] / temperature
 
         # Single-pass two-tier repetition penalty
-        all_seen = set(token_ids[0].tolist())
-        recent = set(token_ids[0][-15:].tolist())  # tighter window, was 20
+        from collections import Counter
+        token_counts = Counter(token_ids[0].tolist())
+        recent = set(token_ids[0][-15:].tolist())
 
-        for token_id in all_seen:
-            if token_id in recent:
-                logits_last_token[0, token_id] /= 3.0  # was 2.0
+        for token_id, count in token_counts.items():
+            if count > 3:
+                logits_last_token[0, token_id] = -float('inf')  # hard block
+            elif token_id in recent:
+                logits_last_token[0, token_id] /= 2.0
             else:
                 logits_last_token[0, token_id] /= 1.3
 
-        # Force a newline at stanza boundaries
-        if lines_so_far in stanza_breaks[:-1]:
-            logits_last_token[0, newline_token] += 5.0
-
-        # Force stop after line 14
-        if lines_so_far >= 14:
-            break
-
         probs = torch.nn.functional.softmax(logits_last_token, dim=-1)
 
-        # Top-k
-        top_k = 30
-        top_k_probs, top_k_indices = torch.topk(probs, top_k)
-        probs_filtered = torch.zeros_like(probs).scatter_(1, top_k_indices, top_k_probs)
-        probs_filtered /= probs_filtered.sum(dim=-1, keepdim=True)
-
-        # Top-p
-        sorted_probs, sorted_indices = torch.sort(probs_filtered, descending=True)
+        # Top-p only, no top-k
+        sorted_probs, sorted_indices = torch.sort(probs, descending=True)
         cumulative_probs = torch.cumsum(sorted_probs, dim=-1)
         top_p_mask = cumulative_probs <= top_p
         top_p_mask[..., 1:] = top_p_mask[..., :-1].clone()
@@ -129,11 +109,6 @@ class SonnetGPT(nn.Module):
 
         if sampled_token.item() == self.tokenizer.eos_token_id:
             break
-
-        # track newlines
-        if sampled_token.item() == newline_token:
-            lines_so_far += 1
-            print(f"DEBUG: newline detected, lines_so_far={lines_so_far}")
 
         token_ids = torch.cat([token_ids, sampled_token], dim=1)
         attention_mask = torch.cat(
