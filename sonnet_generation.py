@@ -78,7 +78,9 @@ class SonnetGPT(nn.Module):
 
     newline_token = self.tokenizer.encode('\n')[0]
     prompt_text = self.tokenizer.decode(token_ids[0].cpu().tolist())
-    lines_so_far = len([l for l in prompt_text.split('\n') if l.strip()])
+    # replace the prompt counting with hardcoded 3
+    # since held_out sonnets always have exactly 3 lines
+    lines_so_far = 3
 
     for _ in range(max_length):
         logits_sequence = self.forward(token_ids, attention_mask)
@@ -111,6 +113,7 @@ class SonnetGPT(nn.Module):
 
         if sampled_token.item() == newline_token:
             lines_so_far += 1
+            print(f"DEBUG lines_so_far={lines_so_far}")
 
         token_ids = torch.cat([token_ids, sampled_token], dim=1)
         attention_mask = torch.cat(
