@@ -72,19 +72,13 @@ class SonnetGPT(nn.Module):
       return param.device
 
   @torch.no_grad()
-  @torch.no_grad()
-  def generate(self, encoding, temperature=0.7, top_p=0.9, max_length=300):
+  def generate(self, encoding, temperature=0.85, top_p=0.9, max_length=300):
     token_ids = encoding.to(self.get_device())
     attention_mask = torch.ones(token_ids.shape, dtype=torch.int64).to(self.get_device())
 
     for _ in range(max_length):
         logits_sequence = self.forward(token_ids, attention_mask)
         logits_last_token = logits_sequence[:, -1, :] / temperature
-
-        # mild penalty on last 10 tokens, nothing else
-        recent = token_ids[0][-5:].tolist()
-        for token_id in set(recent):
-            logits_last_token[0, token_id] /= 2.0
 
         probs = torch.nn.functional.softmax(logits_last_token, dim=-1)
 
@@ -109,7 +103,6 @@ class SonnetGPT(nn.Module):
 
     generated_output = self.tokenizer.decode(token_ids[0].cpu().numpy().tolist())[3:]
     return token_ids, generated_output
-
 
 
 def save_model(model, optimizer, args, filepath):
