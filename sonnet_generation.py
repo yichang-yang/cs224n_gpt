@@ -89,12 +89,15 @@ class SonnetGPT(nn.Module):
         logits_sequence = self.forward(token_ids, attention_mask)
         logits_last_token = logits_sequence[:, -1, :] / temperature
 
-        # Two-tier repetition penalty
-        for token_id in set(token_ids[0].tolist()):
-            logits_last_token[0, token_id] /= 1.8  # mild for all seen tokens
-        recent_tokens = token_ids[0][-20:].tolist()
-        for token_id in set(recent_tokens):
-            logits_last_token[0, token_id] /= 2.5  # aggressive for recent tokens
+        # Single-pass two-tier repetition penalty
+        all_seen = set(token_ids[0].tolist())
+        recent = set(token_ids[0][-20:].tolist())
+
+        for token_id in all_seen:
+          if token_id in recent:
+              logits_last_token[0, token_id] /= 2.0  # recent penalty only
+          else:
+              logits_last_token[0, token_id] /= 1.3  # mild for older tokens
 
         # Force a newline at stanza boundaries
         if lines_so_far in stanza_breaks[:-1]:
@@ -107,7 +110,7 @@ class SonnetGPT(nn.Module):
         probs = torch.nn.functional.softmax(logits_last_token, dim=-1)
 
         # Top-k
-        top_k = 50
+        top_k = 30
         top_k_probs, top_k_indices = torch.topk(probs, top_k)
         probs_filtered = torch.zeros_like(probs).scatter_(1, top_k_indices, top_k_probs)
         probs_filtered /= probs_filtered.sum(dim=-1, keepdim=True)
@@ -138,6 +141,7 @@ class SonnetGPT(nn.Module):
 
     generated_output = self.tokenizer.decode(token_ids[0].cpu().numpy().tolist())[3:]
     return token_ids, generated_output
+
 
 
 def save_model(model, optimizer, args, filepath):
