@@ -72,28 +72,19 @@ class SonnetGPT(nn.Module):
       return param.device
 
   @torch.no_grad()
+  @torch.no_grad()
   def generate(self, encoding, temperature=0.7, top_p=0.9, max_length=300):
     token_ids = encoding.to(self.get_device())
     attention_mask = torch.ones(token_ids.shape, dtype=torch.int64).to(self.get_device())
-
-    newline_token = self.tokenizer.encode('\n')[0]
-    prompt_text = self.tokenizer.decode(token_ids[0].cpu().tolist())
-    # replace the prompt counting with hardcoded 3
-    # since held_out sonnets always have exactly 3 lines
-    lines_so_far = 3
 
     for _ in range(max_length):
         logits_sequence = self.forward(token_ids, attention_mask)
         logits_last_token = logits_sequence[:, -1, :] / temperature
 
-        # Just flat out ban the last 20 tokens from being sampled again
-        recent = token_ids[0][-20:].tolist()
-        for token_id in recent:
-            logits_last_token[0, token_id] = -float('inf')
-
-        # Hard stop at 14 lines
-        if lines_so_far >= 14:
-            break
+        # mild penalty on last 10 tokens, nothing else
+        recent = token_ids[0][-5:].tolist()
+        for token_id in set(recent):
+            logits_last_token[0, token_id] /= 2.0
 
         probs = torch.nn.functional.softmax(logits_last_token, dim=-1)
 
@@ -110,10 +101,6 @@ class SonnetGPT(nn.Module):
 
         if sampled_token.item() == self.tokenizer.eos_token_id:
             break
-
-        if sampled_token.item() == newline_token:
-            lines_so_far += 1
-            print(f"DEBUG lines_so_far={lines_so_far}")
 
         token_ids = torch.cat([token_ids, sampled_token], dim=1)
         attention_mask = torch.cat(
