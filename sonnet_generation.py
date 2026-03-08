@@ -72,13 +72,11 @@ class SonnetGPT(nn.Module):
       return param.device
 
   @torch.no_grad()
-  @torch.no_grad()
   def generate(self, encoding, temperature=0.7, top_p=0.9, max_length=300):
     token_ids = encoding.to(self.get_device())
     attention_mask = torch.ones(token_ids.shape, dtype=torch.int64).to(self.get_device())
 
     newline_token = self.tokenizer.encode('\n')[0]
-    
     prompt_text = self.tokenizer.decode(token_ids[0].cpu().tolist())
     lines_so_far = len([l for l in prompt_text.split('\n') if l.strip()])
 
@@ -86,13 +84,10 @@ class SonnetGPT(nn.Module):
         logits_sequence = self.forward(token_ids, attention_mask)
         logits_last_token = logits_sequence[:, -1, :] / temperature
 
-        # Simple two-tier repetition penalty
-        recent = set(token_ids[0][-10:].tolist())
-        for token_id in set(token_ids[0].tolist()):
-            if token_id in recent:
-                logits_last_token[0, token_id] /= 1.5
-            else:
-                logits_last_token[0, token_id] /= 1.2
+        # Just flat out ban the last 20 tokens from being sampled again
+        recent = token_ids[0][-20:].tolist()
+        for token_id in recent:
+            logits_last_token[0, token_id] = -float('inf')
 
         # Hard stop at 14 lines
         if lines_so_far >= 14:
