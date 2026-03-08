@@ -91,13 +91,13 @@ class SonnetGPT(nn.Module):
 
         # Single-pass two-tier repetition penalty
         all_seen = set(token_ids[0].tolist())
-        recent = set(token_ids[0][-20:].tolist())
+        recent = set(token_ids[0][-15:].tolist())  # tighter window, was 20
 
         for token_id in all_seen:
-          if token_id in recent:
-              logits_last_token[0, token_id] /= 2.0  # recent penalty only
-          else:
-              logits_last_token[0, token_id] /= 1.3  # mild for older tokens
+            if token_id in recent:
+                logits_last_token[0, token_id] /= 3.0  # was 2.0
+            else:
+                logits_last_token[0, token_id] /= 1.3
 
         # Force a newline at stanza boundaries
         if lines_so_far in stanza_breaks[:-1]:
@@ -133,6 +133,7 @@ class SonnetGPT(nn.Module):
         # track newlines
         if sampled_token.item() == newline_token:
             lines_so_far += 1
+            print(f"DEBUG: newline detected, lines_so_far={lines_so_far}")
 
         token_ids = torch.cat([token_ids, sampled_token], dim=1)
         attention_mask = torch.cat(
