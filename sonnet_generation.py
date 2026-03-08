@@ -260,8 +260,8 @@ def add_arguments(args):
 
 
 if __name__ == "__main__":
-  args = get_args()
-  args.filepath = f'{args.epochs}-{args.lr}-sonnet.pt'  # Save path.
-  seed_everything(args.seed)  # Fix the seed for reproducibility.
-  train(args)
-  generate_submission_sonnets(args)
+    args = get_args()
+    args.filepath = f'{args.model_size}-{args.epochs}-{args.lr}-sonnet.pt'  # add model_size
+    seed_everything(args.seed)
+    train(args)
+    generate_submission_sonnets(args)
