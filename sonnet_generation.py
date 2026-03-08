@@ -76,27 +76,28 @@ class SonnetGPT(nn.Module):
     token_ids = encoding.to(self.get_device())
     attention_mask = torch.ones(token_ids.shape, dtype=torch.int64).to(self.get_device())
     
-    newline_token = self.tokenizer.encode('\n')[0]
-    
+    newline_token = 198  # GPT-2's actual newline token
+
     # count how many lines are already in the prompt
     prompt_text = self.tokenizer.decode(token_ids[0])
     lines_so_far = prompt_text.count('\n')
-    
+
     # sonnet structure: lines per stanza
-    # prompt already gives us 3 lines, so we need 11 more
-    stanza_breaks = [4, 8, 12, 14]  # line numbers where stanzas end
+    stanza_breaks = [4, 8, 12, 14]
 
     for _ in range(max_length):
         logits_sequence = self.forward(token_ids, attention_mask)
         logits_last_token = logits_sequence[:, -1, :] / temperature
 
-        # Repetition penalty
+        # Two-tier repetition penalty
         for token_id in set(token_ids[0].tolist()):
-            logits_last_token[0, token_id] /= 1.5
+            logits_last_token[0, token_id] /= 1.8  # mild for all seen tokens
+        recent_tokens = token_ids[0][-20:].tolist()
+        for token_id in set(recent_tokens):
+            logits_last_token[0, token_id] /= 2.5  # aggressive for recent tokens
 
         # Force a newline at stanza boundaries
-        if lines_so_far in stanza_breaks[:-1]:  # after lines 4, 8, 12
-            # boost newline token probability heavily
+        if lines_so_far in stanza_breaks[:-1]:
             logits_last_token[0, newline_token] += 5.0
 
         # Force stop after line 14
@@ -171,54 +172,49 @@ def train(args):
   lr = args.lr
   optimizer = AdamW(model.parameters(), lr=lr)
 
-  best_loss = float('inf')
-  patience = 3
-  epochs_no_improve = 0
+  # NEW: load checkpoint if provided
+  start_epoch = 0
+  if args.checkpoint is not None:
+      print(f"Loading checkpoint from {args.checkpoint}")
+      saved = torch.load(args.checkpoint, weights_only=False)
+      model.load_state_dict(saved['model'])
+      optimizer.load_state_dict(saved['optim'])
+      # figure out what epoch we left off at
+      start_epoch = int(args.checkpoint.split('_')[0]) + 1
+      print(f"Resuming from epoch {start_epoch}")
 
-  for epoch in range(args.epochs):
-      model.train()
-      train_loss = 0
-      num_batches = 0
+  # change range to start from start_epoch
+  for epoch in range(start_epoch, args.epochs):
+    model.train()
+    train_loss = 0
+    num_batches = 0
 
-      for batch in tqdm(sonnet_dataloader, desc=f'train-{epoch}', disable=TQDM_DISABLE):
-          b_ids, b_mask = batch['token_ids'], batch['attention_mask']
-          b_ids = b_ids.to(device)
-          b_mask = b_mask.to(device)
+    for batch in tqdm(sonnet_dataloader, desc=f'train-{epoch}', disable=TQDM_DISABLE):
+        b_ids, b_mask = batch['token_ids'], batch['attention_mask']
+        b_ids = b_ids.to(device)
+        b_mask = b_mask.to(device)
 
-          optimizer.zero_grad()
-          logits = model(b_ids, b_mask)
-          logits = rearrange(logits[:, :-1].contiguous(), 'b t d -> (b t) d')
-          labels = b_ids[:, 1:].contiguous().flatten()
-          loss = F.cross_entropy(logits, labels, reduction='mean')
-          loss.backward()
-          optimizer.step()
+        optimizer.zero_grad()
+        logits = model(b_ids, b_mask)
+        logits = rearrange(logits[:, :-1].contiguous(), 'b t d -> (b t) d')
+        labels = b_ids[:, 1:].contiguous().flatten()
+        loss = F.cross_entropy(logits, labels, reduction='mean')
+        loss.backward()
+        optimizer.step()
 
-          train_loss += loss.item()
-          num_batches += 1
+        train_loss += loss.item()
+        num_batches += 1
 
-      train_loss = train_loss / num_batches
-      print(f"Epoch {epoch}: train loss :: {train_loss :.3f}.")
+    train_loss = train_loss / num_batches
+    print(f"Epoch {epoch}: train loss :: {train_loss :.3f}.")
+    save_model(model, optimizer, args, f'{epoch}_{args.filepath}')
 
-      # Early stopping check
-      if train_loss < best_loss:
-          best_loss = train_loss
-          epochs_no_improve = 0
-          save_model(model, optimizer, args, f'{epoch}_{args.filepath}')
-          print(f"New best model saved (loss: {best_loss:.3f})")
-      else:
-          epochs_no_improve += 1
-          print(f"No improvement for {epochs_no_improve} epoch(s).")
-          if epochs_no_improve >= patience:
-              print("Early stopping triggered.")
-              break
-
-      print('Generating several output sonnets...')
-      model.eval()
-      for batch in held_out_sonnet_dataset:
-          encoding = model.tokenizer(batch[1], return_tensors='pt', padding=True, truncation=True).to(device)
-          output = model.generate(encoding['input_ids'], temperature=args.temperature, top_p=args.top_p)
-          print(f'{batch[1]}{output[1]}\n\n')
-
+    print('Generating several output sonnets...')
+    model.eval()
+    for batch in held_out_sonnet_dataset:
+        encoding = model.tokenizer(batch[1], return_tensors='pt', padding=True, truncation=True).to(device)
+        output = model.generate(encoding['input_ids'], temperature=args.temperature, top_p=args.top_p)
+        print(f'{batch[1]}{output[1]}\n\n')
 
 @torch.no_grad()
 def generate_submission_sonnets(args):
@@ -271,6 +267,8 @@ def get_args():
   parser.add_argument("--lr", type=float, help="learning rate", default=1e-5)
   parser.add_argument("--model_size", type=str, help="The model size as specified on hugging face.",
                       choices=['gpt2', 'gpt2-medium', 'gpt2-large', 'gpt2-xl'], default='gpt2')
+  parser.add_argument("--checkpoint", type=str, default=None, 
+                        help="Path to checkpoint to resume training from")
 
   args = parser.parse_args()
   return args
