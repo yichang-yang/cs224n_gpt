@@ -72,30 +72,34 @@ class SonnetGPT(nn.Module):
       return param.device
 
   @torch.no_grad()
+  @torch.no_grad()
   def generate(self, encoding, temperature=0.7, top_p=0.9, max_length=300):
     token_ids = encoding.to(self.get_device())
     attention_mask = torch.ones(token_ids.shape, dtype=torch.int64).to(self.get_device())
+
+    newline_token = self.tokenizer.encode('\n')[0]
+    
+    prompt_text = self.tokenizer.decode(token_ids[0].cpu().tolist())
+    lines_so_far = len([l for l in prompt_text.split('\n') if l.strip()])
 
     for _ in range(max_length):
         logits_sequence = self.forward(token_ids, attention_mask)
         logits_last_token = logits_sequence[:, -1, :] / temperature
 
-        # Single-pass two-tier repetition penalty
-        from collections import Counter
-        token_counts = Counter(token_ids[0].tolist())
-        recent = set(token_ids[0][-15:].tolist())
-
-        for token_id, count in token_counts.items():
-            if count > 3:
-                logits_last_token[0, token_id] = -float('inf')  # hard block
-            elif token_id in recent:
-                logits_last_token[0, token_id] /= 2.0
+        # Simple two-tier repetition penalty
+        recent = set(token_ids[0][-10:].tolist())
+        for token_id in set(token_ids[0].tolist()):
+            if token_id in recent:
+                logits_last_token[0, token_id] /= 1.5
             else:
-                logits_last_token[0, token_id] /= 1.3
+                logits_last_token[0, token_id] /= 1.2
+
+        # Hard stop at 14 lines
+        if lines_so_far >= 14:
+            break
 
         probs = torch.nn.functional.softmax(logits_last_token, dim=-1)
 
-        # Top-p only, no top-k
         sorted_probs, sorted_indices = torch.sort(probs, descending=True)
         cumulative_probs = torch.cumsum(sorted_probs, dim=-1)
         top_p_mask = cumulative_probs <= top_p
@@ -109,6 +113,9 @@ class SonnetGPT(nn.Module):
 
         if sampled_token.item() == self.tokenizer.eos_token_id:
             break
+
+        if sampled_token.item() == newline_token:
+            lines_so_far += 1
 
         token_ids = torch.cat([token_ids, sampled_token], dim=1)
         attention_mask = torch.cat(
