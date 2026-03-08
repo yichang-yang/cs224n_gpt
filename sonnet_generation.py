@@ -72,9 +72,19 @@ class SonnetGPT(nn.Module):
       return param.device
 
   @torch.no_grad()
-  def generate(self, encoding, temperature=0.7, top_p=0.9, max_length=128):
+  def generate(self, encoding, temperature=0.7, top_p=0.9, max_length=300):
     token_ids = encoding.to(self.get_device())
     attention_mask = torch.ones(token_ids.shape, dtype=torch.int64).to(self.get_device())
+    
+    newline_token = self.tokenizer.encode('\n')[0]
+    
+    # count how many lines are already in the prompt
+    prompt_text = self.tokenizer.decode(token_ids[0])
+    lines_so_far = prompt_text.count('\n')
+    
+    # sonnet structure: lines per stanza
+    # prompt already gives us 3 lines, so we need 11 more
+    stanza_breaks = [4, 8, 12, 14]  # line numbers where stanzas end
 
     for _ in range(max_length):
         logits_sequence = self.forward(token_ids, attention_mask)
@@ -82,17 +92,26 @@ class SonnetGPT(nn.Module):
 
         # Repetition penalty
         for token_id in set(token_ids[0].tolist()):
-            logits_last_token[0, token_id] /= 1.7
+            logits_last_token[0, token_id] /= 1.5
+
+        # Force a newline at stanza boundaries
+        if lines_so_far in stanza_breaks[:-1]:  # after lines 4, 8, 12
+            # boost newline token probability heavily
+            logits_last_token[0, newline_token] += 5.0
+
+        # Force stop after line 14
+        if lines_so_far >= 14:
+            break
 
         probs = torch.nn.functional.softmax(logits_last_token, dim=-1)
 
-        # Top-k filtering
+        # Top-k
         top_k = 50
         top_k_probs, top_k_indices = torch.topk(probs, top_k)
         probs_filtered = torch.zeros_like(probs).scatter_(1, top_k_indices, top_k_probs)
         probs_filtered /= probs_filtered.sum(dim=-1, keepdim=True)
 
-        # Top-p (nucleus) sampling on top of top-k
+        # Top-p
         sorted_probs, sorted_indices = torch.sort(probs_filtered, descending=True)
         cumulative_probs = torch.cumsum(sorted_probs, dim=-1)
         top_p_mask = cumulative_probs <= top_p
@@ -106,6 +125,10 @@ class SonnetGPT(nn.Module):
 
         if sampled_token.item() == self.tokenizer.eos_token_id:
             break
+
+        # track newlines
+        if sampled_token.item() == newline_token:
+            lines_so_far += 1
 
         token_ids = torch.cat([token_ids, sampled_token], dim=1)
         attention_mask = torch.cat(
