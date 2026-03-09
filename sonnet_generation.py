@@ -174,7 +174,7 @@ def train_dpo(args):
       if len(lines) < 4:
         continue
       prompt_text = '\n'.join(lines[:3]) + '\n'
-      win_text = '\n'.join(lines) + '\n'  # same normalization as prompt_text
+      win_text = '\n'.join(lines) + '\n'
 
       enc = tokenizer(prompt_text, return_tensors='pt').to(device)
       rejected_ids, _ = policy_model.generate(enc['input_ids'], temperature=args.temperature, top_p=args.top_p)
