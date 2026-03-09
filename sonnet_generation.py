@@ -23,7 +23,7 @@ from tqdm import tqdm
 from transformers import GPT2Tokenizer
 from einops import rearrange
 
-# from modules.attention import LoraLayer
+from modules.attention import LoraLayer
 
 from datasets import (
   SonnetsDataset,
@@ -55,9 +55,14 @@ class SonnetGPT(nn.Module):
     self.tokenizer = GPT2Tokenizer.from_pretrained('gpt2')
     self.tokenizer.pad_token = self.tokenizer.eos_token
 
-    # By default, fine-tune the full model. TODO: this is maybe not idea.
+    # Freeze all base weights, train only LoRA adapters
     for param in self.gpt.parameters():
-      param.requires_grad = True
+      param.requires_grad = False
+
+    for layer in self.gpt.gpt_layers[-12:]:
+      attn = layer.self_attention
+      attn.query = LoraLayer(attn.query, alpha=32, rank=16)
+      attn.value = LoraLayer(attn.value, alpha=32, rank=16)
 
   def forward(self, input_ids, attention_mask):
     """
@@ -286,6 +291,8 @@ def train(args):
       best_loss = saved.get('best_loss', float('inf'))
       print(f"Resuming from checkpoint (best loss so far: {best_loss:.3f})")
 
+  scaler = torch.amp.GradScaler('cuda')
+
   for epoch in range(start_epoch, args.epochs):
     model.train()
     train_loss = 0
@@ -297,12 +304,14 @@ def train(args):
         b_mask = b_mask.to(device)
 
         optimizer.zero_grad()
-        logits = model(b_ids, b_mask)
-        logits = rearrange(logits[:, :-1].contiguous(), 'b t d -> (b t) d')
-        labels = b_ids[:, 1:].contiguous().flatten()
-        loss = F.cross_entropy(logits, labels, reduction='mean')
-        loss.backward()
-        optimizer.step()
+        with torch.amp.autocast('cuda'):
+          logits = model(b_ids, b_mask)
+          logits = rearrange(logits[:, :-1].contiguous(), 'b t d -> (b t) d')
+          labels = b_ids[:, 1:].contiguous().flatten()
+          loss = F.cross_entropy(logits, labels, reduction='mean')
+        scaler.scale(loss).backward()
+        scaler.step(optimizer)
+        scaler.update()
 
         train_loss += loss.item()
         num_batches += 1
