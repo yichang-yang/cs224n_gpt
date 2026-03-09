@@ -185,7 +185,7 @@ def train(args):
 
     train_loss = train_loss / num_batches
     print(f"Epoch {epoch}: train loss :: {train_loss :.3f}.")
-    if epoch % 5 == 0 or epoch == args.epochs - 1:
+    if epoch >= 24 and epoch % 5 == 0 or epoch == args.epochs - 1:
         save_model(model, optimizer, args, f'{epoch}_{args.filepath}')
 
     #print('Generating several output sonnets...')
