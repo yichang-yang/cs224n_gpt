@@ -59,10 +59,10 @@ class SonnetGPT(nn.Module):
     for param in self.gpt.parameters():
       param.requires_grad = False
 
-    for layer in self.gpt.gpt_layers[-12:]:
+    for layer in self.gpt.gpt_layers:
       attn = layer.self_attention
-      attn.query = LoraLayer(attn.query, alpha=32, rank=16)
-      attn.value = LoraLayer(attn.value, alpha=32, rank=16)
+      attn.query = LoraLayer(attn.query, alpha=32, rank=32)
+      attn.value = LoraLayer(attn.value, alpha=32, rank=32)
 
   def forward(self, input_ids, attention_mask):
     """
