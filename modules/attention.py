@@ -6,22 +6,21 @@ from torch import nn
 
 
 class LoraLayer(nn.Module):
-    def __init__(self, cross_att_matrix, rank=8, alpha=8):
-        super().__init__()
-        self.cross_att_matrix = cross_att_matrix
-        # freeze base weights
-        self.cross_att_matrix.weight.requires_grad = False
-        if self.cross_att_matrix.bias is not None:
-            self.cross_att_matrix.bias.requires_grad = False
-        self.rank = rank
-        self.alpha = alpha
-        self.A = nn.Linear(self.cross_att_matrix.in_features, rank, bias=False)
-        self.B = nn.Linear(rank, self.cross_att_matrix.out_features, bias=False)
-        nn.init.kaiming_uniform_(self.A.weight)
-        nn.init.zeros_(self.B.weight)
-
-    def forward(self, x):
-        return self.cross_att_matrix(x) + self.B(self.A(x)) * (self.alpha / self.rank)
+  def __init__(self, cross_att_matrix, rank=8, alpha=8):
+    super().__init__()
+    self.cross_att_matrix = cross_att_matrix
+    # self.cross_att_matrix.weight.requires_grad = False
+    # self.cross_att_matrix.bias.requires_grad = False
+    self.rank = rank
+    self.alpha = alpha
+    self.A = nn.Linear(self.cross_att_matrix.in_features, rank, bias=False)
+    self.B = nn.Linear(rank, self.cross_att_matrix.out_features, bias=False)
+    nn.init.kaiming_uniform_(self.A.weight)
+    nn.init.zeros_(self.B.weight)
+  
+  def forward(self, x):
+    ans = self.cross_att_matrix(x) + self.B(self.A(x)) * (self.alpha / self.rank)
+    return ans
 
 
 class CausalSelfAttention(nn.Module):
