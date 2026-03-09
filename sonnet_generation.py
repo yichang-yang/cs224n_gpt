@@ -26,6 +26,7 @@ from datasets import (
   SonnetsDataset,
 )
 from models.gpt2 import GPT2Model
+from modules.attention import LoraLayer
 
 from optimizer import AdamW
 
@@ -52,9 +53,22 @@ class SonnetGPT(nn.Module):
     self.tokenizer = GPT2Tokenizer.from_pretrained('gpt2')
     self.tokenizer.pad_token = self.tokenizer.eos_token
 
-    # By default, fine-tune the full model. TODO: this is maybe not idea.
-    for param in self.gpt.parameters():
-      param.requires_grad = True
+    if hasattr(args, 'use_lora') and args.use_lora:
+        # freeze all base weights
+        for param in self.gpt.parameters():
+            param.requires_grad = False
+        # apply LoRA to all layers
+        for layer in self.gpt.gpt_layers:
+            attn = layer.self_attention
+            attn.query = LoraLayer(attn.query, rank=args.lora_rank, alpha=args.lora_alpha)
+            attn.value = LoraLayer(attn.value, rank=args.lora_rank, alpha=args.lora_alpha)
+        # print trainable params
+        total = sum(p.numel() for p in self.gpt.parameters())
+        trainable = sum(p.numel() for p in self.gpt.parameters() if p.requires_grad)
+        print(f"Trainable params: {trainable:,} / {total:,} ({100*trainable/total:.2f}%)")
+    else:
+        for param in self.gpt.parameters():
+            param.requires_grad = True
 
   def forward(self, input_ids, attention_mask):
     """
@@ -213,30 +227,33 @@ def generate_submission_sonnets(args):
 
 
 def get_args():
-  parser = argparse.ArgumentParser()
+    parser = argparse.ArgumentParser()
 
-  parser.add_argument("--sonnet_path", type=str, default="data/sonnets.txt")
-  parser.add_argument("--held_out_sonnet_path", type=str, default="data/sonnets_held_out.txt")
-  parser.add_argument("--sonnet_out", type=str, default="predictions/generated_sonnets.txt")
+    parser.add_argument("--sonnet_path", type=str, default="data/sonnets.txt")
+    parser.add_argument("--held_out_sonnet_path", type=str, default="data/sonnets_held_out.txt")
+    parser.add_argument("--sonnet_out", type=str, default="predictions/generated_sonnets.txt")
 
-  parser.add_argument("--seed", type=int, default=11711)
-  parser.add_argument("--epochs", type=int, default=10)
-  parser.add_argument("--use_gpu", action='store_true')
+    parser.add_argument("--seed", type=int, default=11711)
+    parser.add_argument("--epochs", type=int, default=10)
+    parser.add_argument("--use_gpu", action='store_true')
 
-  # Generation parameters.
-  parser.add_argument("--temperature", type=float, help="softmax temperature.", default=0.7)
-  parser.add_argument("--top_p", type=float, help="Cumulative probability distribution for nucleus sampling.",
-                      default=0.9)
+    # Generation parameters
+    parser.add_argument("--temperature", type=float, default=0.7)
+    parser.add_argument("--top_p", type=float, default=0.9)
 
-  parser.add_argument("--batch_size", help='The training batch size.', type=int, default=8)
-  parser.add_argument("--lr", type=float, help="learning rate", default=1e-5)
-  parser.add_argument("--model_size", type=str, help="The model size as specified on hugging face.",
-                      choices=['gpt2', 'gpt2-medium', 'gpt2-large', 'gpt2-xl'], default='gpt2')
-  parser.add_argument("--checkpoint", type=str, default=None, 
-                        help="Path to checkpoint to resume training from")
+    parser.add_argument("--batch_size", type=int, default=4)
+    parser.add_argument("--lr", type=float, default=1e-5)
+    parser.add_argument("--model_size", type=str,
+                        choices=['gpt2', 'gpt2-medium', 'gpt2-large', 'gpt2-xl'], default='gpt2')
+    parser.add_argument("--checkpoint", type=str, default=None)
 
-  args = parser.parse_args()
-  return args
+    # LoRA parameters
+    parser.add_argument("--use_lora", action='store_true')
+    parser.add_argument("--lora_rank", type=int, default=16)
+    parser.add_argument("--lora_alpha", type=int, default=32)
+
+    args = parser.parse_args()
+    return args
 
 
 def add_arguments(args):
@@ -260,7 +277,10 @@ def add_arguments(args):
 
 if __name__ == "__main__":
     args = get_args()
-    args.filepath = f'{args.model_size}-{args.epochs}-{args.lr}-sonnet.pt'  # add model_size
+    if args.use_lora:
+        args.filepath = f'{args.model_size}-lora{args.lora_rank}-{args.epochs}-{args.lr}-sonnet.pt'
+    else:
+        args.filepath = f'{args.model_size}-{args.epochs}-{args.lr}-sonnet.pt'
     seed_everything(args.seed)
     train(args)
     generate_submission_sonnets(args)
