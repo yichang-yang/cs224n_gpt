@@ -10,6 +10,7 @@ trains your SonnetGPT model and writes the required submission files.
 # Testing JC's edits!!
 
 import argparse
+import os
 import random
 import torch
 
@@ -21,6 +22,8 @@ from torch.utils.data import DataLoader
 from tqdm import tqdm
 from transformers import GPT2Tokenizer
 from einops import rearrange
+
+# from modules.attention import LoraLayer
 
 from datasets import (
   SonnetsDataset,
@@ -72,48 +75,17 @@ class SonnetGPT(nn.Module):
       return param.device
 
   @torch.no_grad()
-  def generate(self, encoding, temperature=0.7, top_p=0.9, max_length=300):
+  def generate(self, encoding, temperature=0.85, top_p=0.9, max_length=300):
     token_ids = encoding.to(self.get_device())
     attention_mask = torch.ones(token_ids.shape, dtype=torch.int64).to(self.get_device())
-    
-    newline_token = 198  # GPT-2's actual newline token
-
-    # count how many lines are already in the prompt
-    prompt_text = self.tokenizer.decode(token_ids[0])
-    lines_so_far = prompt_text.count('\n')
-
-    # sonnet structure: lines per stanza
-    stanza_breaks = [4, 8, 12, 14]
 
     for _ in range(max_length):
         logits_sequence = self.forward(token_ids, attention_mask)
         logits_last_token = logits_sequence[:, -1, :] / temperature
 
-        # Two-tier repetition penalty
-        for token_id in set(token_ids[0].tolist()):
-            logits_last_token[0, token_id] /= 1.8  # mild for all seen tokens
-        recent_tokens = token_ids[0][-20:].tolist()
-        for token_id in set(recent_tokens):
-            logits_last_token[0, token_id] /= 2.5  # aggressive for recent tokens
-
-        # Force a newline at stanza boundaries
-        if lines_so_far in stanza_breaks[:-1]:
-            logits_last_token[0, newline_token] += 5.0
-
-        # Force stop after line 14
-        if lines_so_far >= 14:
-            break
-
         probs = torch.nn.functional.softmax(logits_last_token, dim=-1)
 
-        # Top-k
-        top_k = 50
-        top_k_probs, top_k_indices = torch.topk(probs, top_k)
-        probs_filtered = torch.zeros_like(probs).scatter_(1, top_k_indices, top_k_probs)
-        probs_filtered /= probs_filtered.sum(dim=-1, keepdim=True)
-
-        # Top-p
-        sorted_probs, sorted_indices = torch.sort(probs_filtered, descending=True)
+        sorted_probs, sorted_indices = torch.sort(probs, descending=True)
         cumulative_probs = torch.cumsum(sorted_probs, dim=-1)
         top_p_mask = cumulative_probs <= top_p
         top_p_mask[..., 1:] = top_p_mask[..., :-1].clone()
@@ -127,10 +99,6 @@ class SonnetGPT(nn.Module):
         if sampled_token.item() == self.tokenizer.eos_token_id:
             break
 
-        # track newlines
-        if sampled_token.item() == newline_token:
-            lines_so_far += 1
-
         token_ids = torch.cat([token_ids, sampled_token], dim=1)
         attention_mask = torch.cat(
             [attention_mask, torch.ones((1, 1), dtype=torch.int64).to(self.get_device())], dim=1
@@ -140,11 +108,145 @@ class SonnetGPT(nn.Module):
     return token_ids, generated_output
 
 
-def save_model(model, optimizer, args, filepath):
+
+def get_completion_logprobs(model, input_ids, attention_mask, completion_mask):
+  """Sum of log probs over completion tokens only.
+
+  completion_mask: (B, T-1) float tensor, 1 for completion token positions.
+  """
+  logits = model(input_ids, attention_mask)
+  log_probs = F.log_softmax(logits, dim=-1)
+
+  # token_log_probs[t] = log p(input_ids[t+1] | input_ids[:t+1])
+  token_log_probs = log_probs[:, :-1, :].gather(
+      dim=-1, index=input_ids[:, 1:].unsqueeze(-1)
+  ).squeeze(-1)
+
+  return (token_log_probs * completion_mask * attention_mask[:, 1:].float()).sum(dim=-1)
+
+
+def make_completion_mask(input_ids, prompt_lens, device):
+  """Build a (B, T-1) mask that is 1 only for completion token positions."""
+  B, T = input_ids.shape
+  # token_log_probs has shape (B, T-1); position t predicts token t+1
+  # completion starts at prompt_len in input_ids -> index prompt_len-1 in token_log_probs
+  mask = torch.zeros(B, T - 1, device=device)
+  for i, pl in enumerate(prompt_lens):
+    mask[i, pl - 1:] = 1.0
+  return mask
+
+
+def train_dpo(args):
+  """DPO fine-tuning using training sonnets as chosen and model generations as rejected."""
+  device = torch.device('cuda') if args.use_gpu else torch.device('cpu')
+
+  # Load the best SFT model as both policy and frozen reference
+  saved = torch.load('train_best.pt', weights_only=False)
+
+  policy_model = SonnetGPT(saved['args'])
+  policy_model.load_state_dict(saved['model'])
+  policy_model = policy_model.to(device)
+
+  ref_model = SonnetGPT(saved['args'])
+  ref_model.load_state_dict(saved['model'])
+  ref_model = ref_model.to(device)
+  ref_model.eval()
+  for param in ref_model.parameters():
+    param.requires_grad = False
+
+  tokenizer = policy_model.tokenizer
+  sonnet_dataset = SonnetsDataset(args.sonnet_path)
+
+  # Pre-generate all rejected samples offline before DPO training
+  print("Generating rejected samples from training sonnets...")
+  preference_pairs = []
+  policy_model.eval()
+  with torch.no_grad():
+    for _, sonnet_text in tqdm(sonnet_dataset, desc='generating rejected'):
+      lines = [l for l in sonnet_text.strip().split('\n') if l.strip()]
+      if len(lines) < 4:
+        continue
+      prompt_text = '\n'.join(lines[:3]) + '\n'
+      win_text = '\n'.join(lines) + '\n'  # same normalization as prompt_text
+
+      enc = tokenizer(prompt_text, return_tensors='pt').to(device)
+      rejected_ids, _ = policy_model.generate(enc['input_ids'], temperature=args.temperature, top_p=args.top_p)
+      rejected_text = tokenizer.decode(rejected_ids[0].cpu())
+
+      preference_pairs.append((prompt_text, win_text, rejected_text))
+
+  print(f"Generated {len(preference_pairs)} preference pairs.")
+
+  # DPO training loop
+  optimizer = AdamW(policy_model.parameters(), lr=args.lr * 0.1)
+
+  # Resume DPO from checkpoint if it exists
+  best_dpo_loss = float('inf')
+  if os.path.exists('dpo_best.pt'):
+    print("Resuming DPO from dpo_best.pt")
+    dpo_saved = torch.load('dpo_best.pt', weights_only=False)
+    policy_model.load_state_dict(dpo_saved['model'])
+    optimizer.load_state_dict(dpo_saved['optim'])
+    best_dpo_loss = dpo_saved.get('best_loss', float('inf'))
+    print(f"  -> Best DPO loss so far: {best_dpo_loss:.3f}")
+
+  policy_model.train()
+
+  for epoch in range(args.dpo_epochs):
+    total_loss = 0
+    num_batches = 0
+    random.shuffle(preference_pairs)
+
+    # Iterate over mini-batches
+    for i in tqdm(range(0, len(preference_pairs), args.dpo_batch_size), desc=f'dpo-{epoch}', disable=TQDM_DISABLE):
+      batch = preference_pairs[i: i + args.dpo_batch_size]
+      prompt_texts  = [p[0] for p in batch]
+      chosen_texts  = [p[1] for p in batch]
+      rejected_texts = [p[2] for p in batch]
+
+      # Per-sample prompt lengths (in tokens) — same for chosen and rejected
+      prompt_lens = [tokenizer(p, return_tensors='pt')['input_ids'].shape[1] for p in prompt_texts]
+
+      # Tokenize and pad chosen / rejected separately (they may differ in length)
+      chosen_enc  = tokenizer(chosen_texts,  return_tensors='pt', padding=True, truncation=True).to(device)
+      rejected_enc = tokenizer(rejected_texts, return_tensors='pt', padding=True, truncation=True).to(device)
+
+      chosen_cmask  = make_completion_mask(chosen_enc['input_ids'],  prompt_lens, device)
+      rejected_cmask = make_completion_mask(rejected_enc['input_ids'], prompt_lens, device)
+
+      optimizer.zero_grad()
+
+      logp_chosen  = get_completion_logprobs(policy_model, chosen_enc['input_ids'],  chosen_enc['attention_mask'],  chosen_cmask)
+      logp_rejected = get_completion_logprobs(policy_model, rejected_enc['input_ids'], rejected_enc['attention_mask'], rejected_cmask)
+
+      with torch.no_grad():
+        logp_chosen_ref  = get_completion_logprobs(ref_model, chosen_enc['input_ids'],  chosen_enc['attention_mask'],  chosen_cmask)
+        logp_rejected_ref = get_completion_logprobs(ref_model, rejected_enc['input_ids'], rejected_enc['attention_mask'], rejected_cmask)
+
+      rewards_chosen  = args.dpo_beta * (logp_chosen  - logp_chosen_ref)
+      rewards_rejected = args.dpo_beta * (logp_rejected - logp_rejected_ref)
+      loss = -F.logsigmoid(rewards_chosen - rewards_rejected).mean()
+
+      loss.backward()
+      optimizer.step()
+
+      total_loss += loss.item()
+      num_batches += 1
+
+    dpo_loss = total_loss / num_batches
+    print(f"DPO Epoch {epoch}: loss :: {dpo_loss:.3f}")
+    if dpo_loss < best_dpo_loss:
+      best_dpo_loss = dpo_loss
+      save_model(policy_model, optimizer, saved['args'], 'dpo_best.pt', best_loss=best_dpo_loss)
+      print(f"  -> New best DPO model saved (loss {best_dpo_loss:.3f})")
+
+
+def save_model(model, optimizer, args, filepath, best_loss=None):
   save_info = {
     'model': model.state_dict(),
     'optim': optimizer.state_dict(),
     'args': args,
+    'best_loss': best_loss,
     'system_rng': random.getstate(),
     'numpy_rng': np.random.get_state(),
     'torch_rng': torch.random.get_rng_state(),
@@ -172,18 +274,18 @@ def train(args):
   lr = args.lr
   optimizer = AdamW(model.parameters(), lr=lr)
 
-  # NEW: load checkpoint if provided
+
+  # Auto-resume from train_best.pt if it exists
   start_epoch = 0
-  if args.checkpoint is not None:
-      print(f"Loading checkpoint from {args.checkpoint}")
-      saved = torch.load(args.checkpoint, weights_only=False)
+  best_loss = float('inf')
+  if os.path.exists('train_best.pt'):
+      print("Resuming from train_best.pt")
+      saved = torch.load('train_best.pt', weights_only=False)
       model.load_state_dict(saved['model'])
       optimizer.load_state_dict(saved['optim'])
-      # figure out what epoch we left off at
-      start_epoch = int(args.checkpoint.split('_')[0]) + 1
-      print(f"Resuming from epoch {start_epoch}")
+      best_loss = saved.get('best_loss', float('inf'))
+      print(f"Resuming from checkpoint (best loss so far: {best_loss:.3f})")
 
-  # change range to start from start_epoch
   for epoch in range(start_epoch, args.epochs):
     model.train()
     train_loss = 0
@@ -207,19 +309,24 @@ def train(args):
 
     train_loss = train_loss / num_batches
     print(f"Epoch {epoch}: train loss :: {train_loss :.3f}.")
-    save_model(model, optimizer, args, f'{epoch}_{args.filepath}')
+    if train_loss < best_loss:
+      best_loss = train_loss
+      save_model(model, optimizer, args, 'train_best.pt', best_loss=best_loss)
+      print(f"  -> New best SFT model saved (loss {best_loss:.3f})")
 
-    print('Generating several output sonnets...')
-    model.eval()
-    for batch in held_out_sonnet_dataset:
-        encoding = model.tokenizer(batch[1], return_tensors='pt', padding=True, truncation=True).to(device)
-        output = model.generate(encoding['input_ids'], temperature=args.temperature, top_p=args.top_p)
-        print(f'{batch[1]}{output[1]}\n\n')
+    # print('Generating several output sonnets...')
+    # model.eval()
+    # for batch in held_out_sonnet_dataset:
+    #     encoding = model.tokenizer(batch[1], return_tensors='pt', padding=True, truncation=True).to(device)
+    #     output = model.generate(encoding['input_ids'], temperature=args.temperature, top_p=args.top_p)
+    #     print(f'{batch[1]}{output[1]}\n\n')
 
 @torch.no_grad()
-def generate_submission_sonnets(args):
+def generate_submission_sonnets(args, model_path=None):
   device = torch.device('cuda') if args.use_gpu else torch.device('cpu')
-  saved = torch.load(f'{args.epochs-1}_{args.filepath}', weights_only=False)
+  if model_path is None:
+    model_path = 'train_best.pt'
+  saved = torch.load(model_path, weights_only=False)
 
   model = SonnetGPT(saved['args'])
   model.load_state_dict(saved['model'])
@@ -251,8 +358,8 @@ def get_args():
   parser = argparse.ArgumentParser()
 
   parser.add_argument("--sonnet_path", type=str, default="data/sonnets.txt")
-  parser.add_argument("--held_out_sonnet_path", type=str, default="data/sonnets_held_out.txt")
-  parser.add_argument("--sonnet_out", type=str, default="predictions/generated_sonnets.txt")
+  parser.add_argument("--held_out_sonnet_path", type=str, default="data/sonnets_held_out_dev.txt")
+  parser.add_argument("--sonnet_out", type=str, default="predictions/generated_sonnets_dev.txt")
 
   parser.add_argument("--seed", type=int, default=11711)
   parser.add_argument("--epochs", type=int, default=10)
@@ -267,8 +374,10 @@ def get_args():
   parser.add_argument("--lr", type=float, help="learning rate", default=1e-5)
   parser.add_argument("--model_size", type=str, help="The model size as specified on hugging face.",
                       choices=['gpt2', 'gpt2-medium', 'gpt2-large', 'gpt2-xl'], default='gpt2')
-  parser.add_argument("--checkpoint", type=str, default=None, 
-                        help="Path to checkpoint to resume training from")
+  parser.add_argument("--dpo", action='store_true', help="Run DPO fine-tuning after SFT")
+  parser.add_argument("--dpo_epochs", type=int, default=5, help="Number of DPO training epochs")
+  parser.add_argument("--dpo_beta", type=float, default=0.1, help="DPO beta (KL penalty strength)")
+  parser.add_argument("--dpo_batch_size", type=int, default=5, help="Batch size for DPO training")
 
   args = parser.parse_args()
   return args
@@ -295,7 +404,10 @@ def add_arguments(args):
 
 if __name__ == "__main__":
   args = get_args()
-  args.filepath = f'{args.epochs}-{args.lr}-sonnet.pt'  # Save path.
   seed_everything(args.seed)  # Fix the seed for reproducibility.
   train(args)
-  generate_submission_sonnets(args)
+  if args.dpo:
+    train_dpo(args)
+    generate_submission_sonnets(args, model_path='dpo_best.pt')
+  else:
+    generate_submission_sonnets(args)
