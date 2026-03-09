@@ -55,9 +55,14 @@ class SonnetGPT(nn.Module):
     self.tokenizer = GPT2Tokenizer.from_pretrained('gpt2')
     self.tokenizer.pad_token = self.tokenizer.eos_token
 
-    # By default, fine-tune the full model. TODO: this is maybe not idea.
+    # Freeze base weights, apply LoRA to all layers
     for param in self.gpt.parameters():
-      param.requires_grad = True
+      param.requires_grad = False
+
+    for layer in self.gpt.gpt_layers:
+      attn = layer.self_attention
+      attn.query = LoraLayer(attn.query, alpha=16, rank=16)
+      attn.value = LoraLayer(attn.value, alpha=16, rank=16)
 
 
   def forward(self, input_ids, attention_mask):
