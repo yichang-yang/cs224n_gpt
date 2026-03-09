@@ -57,12 +57,12 @@ class SonnetGPT(nn.Module):
 
     # Freeze base weights, apply LoRA to all layers
     for param in self.gpt.parameters():
-      param.requires_grad = False
+      param.requires_grad = True
 
-    for layer in self.gpt.gpt_layers:
-      attn = layer.self_attention
-      attn.query = LoraLayer(attn.query, alpha=16, rank=16)
-      attn.value = LoraLayer(attn.value, alpha=16, rank=16)
+    # for layer in self.gpt.gpt_layers:
+    #   attn = layer.self_attention
+    #   attn.query = LoraLayer(attn.query, alpha=16, rank=16)
+    #   attn.value = LoraLayer(attn.value, alpha=16, rank=16)
 
 
   def forward(self, input_ids, attention_mask):
@@ -188,6 +188,7 @@ def train_dpo(args):
       preference_pairs.append((prompt_text, win_text, rejected_text))
 
   print(f"Generated {len(preference_pairs)} preference pairs.")
+  torch.cuda.empty_cache()
 
   # DPO training loop
   optimizer = AdamW(policy_model.parameters(), lr=args.lr * 0.1)
@@ -228,10 +229,11 @@ def train_dpo(args):
 
       optimizer.zero_grad()
 
-      logp_chosen  = get_completion_logprobs(policy_model, chosen_enc['input_ids'],  chosen_enc['attention_mask'],  chosen_cmask)
-      logp_rejected = get_completion_logprobs(policy_model, rejected_enc['input_ids'], rejected_enc['attention_mask'], rejected_cmask)
+      with torch.amp.autocast('cuda'):
+        logp_chosen  = get_completion_logprobs(policy_model, chosen_enc['input_ids'],  chosen_enc['attention_mask'],  chosen_cmask)
+        logp_rejected = get_completion_logprobs(policy_model, rejected_enc['input_ids'], rejected_enc['attention_mask'], rejected_cmask)
 
-      with torch.no_grad():
+      with torch.no_grad(), torch.amp.autocast('cuda'):
         logp_chosen_ref  = get_completion_logprobs(ref_model, chosen_enc['input_ids'],  chosen_enc['attention_mask'],  chosen_cmask)
         logp_rejected_ref = get_completion_logprobs(ref_model, rejected_enc['input_ids'], rejected_enc['attention_mask'], rejected_cmask)
 
@@ -423,6 +425,7 @@ if __name__ == "__main__":
   seed_everything(args.seed)  # Fix the seed for reproducibility.
   train(args)
   if args.dpo:
+    torch.cuda.empty_cache()
     train_dpo(args)
     generate_submission_sonnets(args, model_path='dpo_best.pt')
   else:
