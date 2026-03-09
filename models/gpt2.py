@@ -1,5 +1,6 @@
 import torch
 from torch import nn
+from torch.utils.checkpoint import checkpoint
 from transformers import GPT2Model as OpenAIGPT2Model
 
 from config import GPT2Config
@@ -77,7 +78,10 @@ class GPT2Model(GPTPreTrainedModel):
     # Pass the hidden states through the encoder layers.
     for i, layer_module in enumerate(self.gpt_layers):
       # Feed the encoding from the last bert_layer to the next.
-      hidden_states = layer_module(hidden_states, extended_attention_mask)
+      if self.training:
+        hidden_states = checkpoint(layer_module, hidden_states, extended_attention_mask, use_reentrant=False)
+      else:
+        hidden_states = layer_module(hidden_states, extended_attention_mask)
 
     return hidden_states
 
