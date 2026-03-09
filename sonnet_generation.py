@@ -55,14 +55,10 @@ class SonnetGPT(nn.Module):
     self.tokenizer = GPT2Tokenizer.from_pretrained('gpt2')
     self.tokenizer.pad_token = self.tokenizer.eos_token
 
-    # Freeze all base weights, train only LoRA adapters
+    # By default, fine-tune the full model. TODO: this is maybe not idea.
     for param in self.gpt.parameters():
-      param.requires_grad = False
+      param.requires_grad = True
 
-    for layer in self.gpt.gpt_layers[-18:]:
-      attn = layer.self_attention
-      attn.query = LoraLayer(attn.query, alpha=32, rank=16)
-      attn.value = LoraLayer(attn.value, alpha=32, rank=16)
 
   def forward(self, input_ids, attention_mask):
     """
@@ -85,29 +81,35 @@ class SonnetGPT(nn.Module):
     attention_mask = torch.ones(token_ids.shape, dtype=torch.int64).to(self.get_device())
 
     for _ in range(max_length):
-        logits_sequence = self.forward(token_ids, attention_mask)
-        logits_last_token = logits_sequence[:, -1, :] / temperature
+      # Forward pass to get logits
+      logits_sequence = self.forward(token_ids, attention_mask)
+      logits_last_token = logits_sequence[:, -1, :] / temperature  # Apply temperature scaling
 
-        probs = torch.nn.functional.softmax(logits_last_token, dim=-1)
+      # Convert logits to probabilities
+      probs = torch.nn.functional.softmax(logits_last_token, dim=-1)
 
-        sorted_probs, sorted_indices = torch.sort(probs, descending=True)
-        cumulative_probs = torch.cumsum(sorted_probs, dim=-1)
-        top_p_mask = cumulative_probs <= top_p
-        top_p_mask[..., 1:] = top_p_mask[..., :-1].clone()
-        top_p_mask[..., 0] = True
-        filtered_probs = sorted_probs * top_p_mask
-        filtered_probs /= filtered_probs.sum(dim=-1, keepdim=True)
+      # Top-p (nucleus) sampling
+      sorted_probs, sorted_indices = torch.sort(probs, descending=True)
+      cumulative_probs = torch.cumsum(sorted_probs, dim=-1)
+      top_p_mask = cumulative_probs <= top_p
+      top_p_mask[..., 1:] = top_p_mask[..., :-1].clone()  # Shift mask right for proper thresholding
+      top_p_mask[..., 0] = True  # Always include the highest probability token
+      filtered_probs = sorted_probs * top_p_mask  # Zero out unlikely tokens
+      filtered_probs /= filtered_probs.sum(dim=-1, keepdim=True)  # Normalize probabilities
 
-        sampled_index = torch.multinomial(filtered_probs, 1)
-        sampled_token = sorted_indices.gather(dim=-1, index=sampled_index)
+      # Sample from filtered distribution
+      sampled_index = torch.multinomial(filtered_probs, 1)
+      sampled_token = sorted_indices.gather(dim=-1, index=sampled_index)
 
-        if sampled_token.item() == self.tokenizer.eos_token_id:
-            break
+      # Stop if end-of-sequence token is reached
+      if sampled_token.item() == self.tokenizer.eos_token_id:
+        break
 
-        token_ids = torch.cat([token_ids, sampled_token], dim=1)
-        attention_mask = torch.cat(
-            [attention_mask, torch.ones((1, 1), dtype=torch.int64).to(self.get_device())], dim=1
-        )
+      # Append sampled token
+      token_ids = torch.cat([token_ids, sampled_token], dim=1)
+      attention_mask = torch.cat(
+        [attention_mask, torch.ones((1, 1), dtype=torch.int64).to(self.get_device())], dim=1
+      )
 
     generated_output = self.tokenizer.decode(token_ids[0].cpu().numpy().tolist())[3:]
     return token_ids, generated_output
