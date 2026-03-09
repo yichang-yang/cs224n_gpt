@@ -140,13 +140,12 @@ def train(args):
   # NEW: load checkpoint if provided
   start_epoch = 0
   if args.checkpoint is not None:
-      print(f"Loading checkpoint from {args.checkpoint}")
       saved = torch.load(args.checkpoint, weights_only=False)
       model.load_state_dict(saved['model'])
       optimizer.load_state_dict(saved['optim'])
-      # figure out what epoch we left off at
       start_epoch = int(args.checkpoint.split('_')[0]) + 1
-      print(f"Resuming from epoch {start_epoch}")
+      del saved  # free memory immediately
+      torch.cuda.empty_cache()
 
   # change range to start from start_epoch
   for epoch in range(start_epoch, args.epochs):
