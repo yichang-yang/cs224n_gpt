@@ -350,7 +350,9 @@ def train_simpo(args, pairs):
         
         avg_loss = total_loss / num_batches
         print(f"SimPO Epoch {epoch}: loss {avg_loss:.3f}")
-        save_model(model, optimizer, args, f'{epoch}_simpo_{args.filepath}')
+        # replace the save line
+        if epoch % 5 == 0 and epoch > 0:
+            save_model(model, optimizer, args, f'{epoch}_simpo_{args.filepath}')
 
 @torch.no_grad()
 def generate_submission_sonnets(args):
