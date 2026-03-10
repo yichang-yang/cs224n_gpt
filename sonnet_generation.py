@@ -75,6 +75,18 @@ def corrupt_sonnet(lines, strategy):
         # add corrupted extra lines beyond 14
         extra = random.sample(lines, min(3, len(lines)))
         return lines + extra
+
+    elif strategy == 'wrong_ending':
+        # replace last word of alternating lines (breaks rhyme scheme)
+        result = lines.copy()
+        vocab = [w for line in lines for w in line.split()]
+        for i in [1, 3, 5, 7]:  # ABAB lines
+            if i < len(result):
+                words = result[i].split()
+                if words:
+                    words[-1] = random.choice(vocab)
+                    result[i] = ' '.join(words)
+        return result
     
 def build_preference_pairs(sonnets_path):
     pairs = []
@@ -97,17 +109,18 @@ def build_preference_pairs(sonnets_path):
     
     print(f"Loaded {len(raw_sonnets)} sonnets for corruption")
     
-    strategies = ['shuffle', 'truncate', 'repeat', 'extra_lines']
+    strategies = ['shuffle', 'truncate', 'repeat', 'extra_lines', 'wrong_ending']
     for sonnet_lines in raw_sonnets:
         winner = '\n'.join(sonnet_lines)
-        strategy = random.choice(strategies)
-        corrupted = corrupt_sonnet(sonnet_lines, strategy)
-        loser = '\n'.join(corrupted)
-        pairs.append({
-            'winner': winner,
-            'loser': loser,
-            'strategy': strategy
-        })
+        for strategy in strategies:  # one pair per strategy instead of random
+            corrupted = corrupt_sonnet(sonnet_lines, strategy)
+            loser = '\n'.join(corrupted)
+            pairs.append({
+                'prompt': '\n'.join(sonnet_lines[:3]),
+                'winner': winner,
+                'loser': loser,
+                'strategy': strategy
+            })
     
     print(f"Built {len(pairs)} preference pairs")
     return pairs
@@ -200,21 +213,21 @@ def save_model(model, optimizer, args, filepath):
   torch.save(save_info, filepath)
   print(f"save the model to {filepath}")
 
-def compute_log_prob(model, input_ids, attention_mask):
-    """Compute sum of log probs for the sequence."""
+def compute_log_prob(model, input_ids, attention_mask, prompt_len):
     logits = model(input_ids, attention_mask)
     log_probs = F.log_softmax(logits, dim=-1)
     token_log_probs = log_probs[:, :-1].gather(
         dim=-1,
         index=input_ids[:, 1:].unsqueeze(-1)
     ).squeeze(-1)
-    return (token_log_probs * attention_mask[:, 1:].float()).sum(dim=-1)
+    # mask out prompt tokens - only score response
+    response_mask = attention_mask[:, 1:].float().clone()
+    response_mask[:, :prompt_len] = 0
+    return (token_log_probs * response_mask).sum(dim=-1)
 
-
-def simpo_loss(model, winner_ids, winner_mask, loser_ids, loser_mask, beta=2.0, gamma=0.5):
-    """SimPO loss - no reference model needed."""
-    logp_w = compute_log_prob(model, winner_ids, winner_mask)
-    logp_l = compute_log_prob(model, loser_ids, loser_mask)
+def simpo_loss(model, winner_ids, winner_mask, loser_ids, loser_mask, prompt_len, beta=0.5, gamma=0.1):
+    logp_w = compute_log_prob(model, winner_ids, winner_mask, prompt_len)
+    logp_l = compute_log_prob(model, loser_ids, loser_mask, prompt_len)
     
     len_w = winner_mask.sum(dim=-1).float()
     len_l = loser_mask.sum(dim=-1).float()
@@ -287,6 +300,7 @@ def train(args):
         #encoding = model.tokenizer(batch[1], return_tensors='pt', padding=True, truncation=True).to(device)
         #output = model.generate(encoding['input_ids'], temperature=args.temperature, top_p=args.top_p)
         #print(f'{batch[1]}{output[1]}\n\n')
+        
 def train_simpo(args, pairs):
     """Fine-tune with SimPO on top of best checkpoint using LoRA."""
     device = torch.device('cuda') if args.use_gpu else torch.device('cpu')
@@ -319,6 +333,13 @@ def train_simpo(args, pairs):
         num_batches = 0
         
         for pair in pairs:
+
+            prompt_enc = model.tokenizer(
+                pair['prompt'],
+                return_tensors='pt'
+            )
+            prompt_len = prompt_enc['input_ids'].shape[1]
+
             # tokenize winner and loser
             winner_enc = model.tokenizer(
                 pair['winner'], 
@@ -340,11 +361,15 @@ def train_simpo(args, pairs):
             loss = simpo_loss(
                 model,
                 winner_enc['input_ids'], winner_enc['attention_mask'],
-                loser_enc['input_ids'], loser_enc['attention_mask']
+                loser_enc['input_ids'], loser_enc['attention_mask'],
+                prompt_len  # pass it here
             )
             loss.backward()
+            torch.nn.utils.clip_grad_norm_(
+                filter(lambda p: p.requires_grad, model.parameters()),
+                max_norm=1.0
+            )
             optimizer.step()
-            
             total_loss += loss.item()
             num_batches += 1
         
