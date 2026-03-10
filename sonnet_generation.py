@@ -447,21 +447,7 @@ if __name__ == "__main__":
     if args.run_simpo:
         # build pairs then train simpo
         args.filepath = f'{args.model_size}-simpo-{args.simpo_epochs}-{args.lr}-sonnet.pt'
-        saved = torch.load('25_gpt2-large-50-1e-05-sonnet.pt', weights_only=False)
-        temp_model = SonnetGPT(saved['args'])
-        temp_model.load_state_dict(saved['model'])
-        temp_model = temp_model.to(torch.device('cuda' if args.use_gpu else 'cpu'))
-        temp_model.eval()
-        
-        pairs = build_preference_pairs(
-            args.sonnet_path, 
-            temp_model, 
-            temp_model.tokenizer,
-            torch.device('cuda' if args.use_gpu else 'cpu')
-        )
-        del temp_model
-        torch.cuda.empty_cache()
-        
+        pairs = build_preference_pairs(args.sonnet_path)      
         train_simpo(args, pairs)
     else:
         train(args)
