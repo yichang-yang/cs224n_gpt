@@ -358,8 +358,10 @@ def train_simpo(args, pairs):
 def generate_submission_sonnets(args):
   device = torch.device('cuda') if args.use_gpu else torch.device('cpu')
   saved = torch.load(f'{args.epochs-1}_{args.filepath}', weights_only=False)
+  saved['args'] = add_arguments(saved['args'])
 
   model = SonnetGPT(saved['args'])
+  
   model.load_state_dict(saved['model'])
   model = model.to(device)
   model.eval()
