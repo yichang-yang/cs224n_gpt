@@ -225,7 +225,7 @@ def compute_log_prob(model, input_ids, attention_mask, prompt_len):
     response_mask[:, :prompt_len] = 0
     return (token_log_probs * response_mask).sum(dim=-1)
 
-def simpo_loss(model, winner_ids, winner_mask, loser_ids, loser_mask, prompt_len, beta=0.5, gamma=0.1):
+def simpo_loss(model, winner_ids, winner_mask, loser_ids, loser_mask, prompt_len, beta=2, gamma=0.5):
     logp_w = compute_log_prob(model, winner_ids, winner_mask, prompt_len)
     logp_l = compute_log_prob(model, loser_ids, loser_mask, prompt_len)
     
@@ -332,17 +332,13 @@ def train_simpo(args, pairs):
         total_loss = 0
         num_batches = 0
         
-        for pair in pairs:
-
-            prompt_enc = model.tokenizer(
-                pair['prompt'],
-                return_tensors='pt'
-            )
-            prompt_len = prompt_enc['input_ids'].shape[1]
-
-            # tokenize winner and loser
+        # replace the single-pair loop with batched processing
+        batch_size = 8
+        for i in range(0, len(pairs), batch_size):
+            batch_pairs = pairs[i:i+batch_size]
+            
             winner_enc = model.tokenizer(
-                pair['winner'], 
+                [p['winner'] for p in batch_pairs],
                 return_tensors='pt',
                 padding=True,
                 truncation=True,
@@ -350,19 +346,26 @@ def train_simpo(args, pairs):
             ).to(device)
             
             loser_enc = model.tokenizer(
-                pair['loser'],
-                return_tensors='pt', 
+                [p['loser'] for p in batch_pairs],
+                return_tensors='pt',
                 padding=True,
                 truncation=True,
                 max_length=256
             ).to(device)
+            
+            # prompt len from first item in batch (all same length since same 3 lines)
+            prompt_enc = model.tokenizer(
+                batch_pairs[0]['prompt'],
+                return_tensors='pt'
+            )
+            prompt_len = prompt_enc['input_ids'].shape[1]
             
             optimizer.zero_grad()
             loss = simpo_loss(
                 model,
                 winner_enc['input_ids'], winner_enc['attention_mask'],
                 loser_enc['input_ids'], loser_enc['attention_mask'],
-                prompt_len  # pass it here
+                prompt_len
             )
             loss.backward()
             torch.nn.utils.clip_grad_norm_(
@@ -370,6 +373,7 @@ def train_simpo(args, pairs):
                 max_norm=1.0
             )
             optimizer.step()
+            
             total_loss += loss.item()
             num_batches += 1
         
@@ -443,7 +447,7 @@ def get_args():
 
     parser.add_argument("--simpo_epochs", type=int, default=5)
     parser.add_argument("--run_simpo", action='store_true')
-    parser.add_argument("--simpo_lr", type=float, default=1e-5)
+    parser.add_argument("--simpo_lr", type=float, default=1e-6)
 
     args = parser.parse_args()
     return args
