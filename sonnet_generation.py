@@ -307,7 +307,7 @@ def train_simpo(args, pairs):
     model = model.to(device)
     optimizer = AdamW(
         filter(lambda p: p.requires_grad, model.parameters()), 
-        lr=1e-4  # higher lr for LoRA
+        lr=args.simpo_lr
     )
     
     print(f"Training SimPO on {len(pairs)} preference pairs")
@@ -415,6 +415,7 @@ def get_args():
 
     parser.add_argument("--simpo_epochs", type=int, default=5)
     parser.add_argument("--run_simpo", action='store_true')
+    parser.add_argument("--simpo_lr", type=float, default=1e-5)
 
     args = parser.parse_args()
     return args
