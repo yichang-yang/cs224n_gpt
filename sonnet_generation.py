@@ -351,7 +351,7 @@ def train_simpo(args, pairs):
         avg_loss = total_loss / num_batches
         print(f"SimPO Epoch {epoch}: loss {avg_loss:.3f}")
         # replace the save line
-        if epoch % 5 == 0 and epoch > 0:
+        if (epoch + 1) % 5 == 0 and epoch > 0:
             save_model(model, optimizer, args, f'{epoch}_simpo_{args.filepath}')
 
 @torch.no_grad()
@@ -443,16 +443,16 @@ if __name__ == "__main__":
     args = get_args()
     if args.use_lora:
         args.filepath = f'{args.model_size}-lora{args.lora_rank}-{args.epochs}-{args.lr}-sonnet.pt'
+    elif args.run_simpo:
+        args.filepath = f'{args.model_size}-simpo-{args.simpo_epochs}-{args.simpo_lr}-sonnet.pt'
     else:
         args.filepath = f'{args.model_size}-{args.epochs}-{args.lr}-sonnet.pt'
+    
     seed_everything(args.seed)
     
     if args.run_simpo:
-        # build pairs then train simpo
-        args.filepath = f'{args.model_size}-simpo-{args.simpo_epochs}-{args.lr}-sonnet.pt'
-        pairs = build_preference_pairs(args.sonnet_path)      
+        pairs = build_preference_pairs(args.sonnet_path)
         train_simpo(args, pairs)
     else:
         train(args)
-    
-    generate_submission_sonnets(args)
+        generate_submission_sonnets(args)
