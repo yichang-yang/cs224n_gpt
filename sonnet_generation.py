@@ -29,6 +29,8 @@ from models.gpt2 import GPT2Model
 from modules.attention import LoraLayer
 
 from optimizer import AdamW
+import random
+from collections import defaultdict
 
 TQDM_DISABLE = False
 
@@ -43,6 +45,72 @@ def seed_everything(seed=11711):
   torch.backends.cudnn.benchmark = False
   torch.backends.cudnn.deterministic = True
 
+
+
+def corrupt_sonnet(lines, strategy):
+    """Generate a negative example from a list of sonnet lines."""
+    lines = [l for l in lines if l.strip()]  # remove empty lines
+    
+    if strategy == 'shuffle':
+        # shuffle lines but keep couplet somewhat intact
+        body = lines[:12]
+        couplet = lines[12:14]
+        random.shuffle(body)
+        return body + couplet
+    
+    elif strategy == 'truncate':
+        # cut to 8-10 lines
+        cut = random.randint(8, 10)
+        return lines[:cut]
+    
+    elif strategy == 'repeat':
+        # duplicate 2-3 random lines
+        result = lines.copy()
+        for _ in range(random.randint(2, 3)):
+            idx = random.randint(0, len(lines)-1)
+            result.insert(idx, lines[idx])
+        return result[:14]  # keep same length
+    
+    elif strategy == 'extra_lines':
+        # add corrupted extra lines beyond 14
+        extra = random.sample(lines, min(3, len(lines)))
+        return lines + extra
+    
+def build_preference_pairs(sonnets_path):
+    pairs = []
+    
+    with open(sonnets_path, 'r') as f:
+        content = f.read()
+    
+    # parse into individual sonnets
+    raw_sonnets = []
+    current = []
+    for line in content.split('\n'):
+        if line.strip().isdigit() and current:
+            if len(current) >= 14:
+                raw_sonnets.append(current[:14])
+            current = []
+        elif line.strip() and not line.strip().isdigit():
+            current.append(line.strip())
+    if len(current) >= 14:
+        raw_sonnets.append(current[:14])
+    
+    print(f"Loaded {len(raw_sonnets)} sonnets for corruption")
+    
+    strategies = ['shuffle', 'truncate', 'repeat', 'extra_lines']
+    for sonnet_lines in raw_sonnets:
+        winner = '\n'.join(sonnet_lines)
+        strategy = random.choice(strategies)
+        corrupted = corrupt_sonnet(sonnet_lines, strategy)
+        loser = '\n'.join(corrupted)
+        pairs.append({
+            'winner': winner,
+            'loser': loser,
+            'strategy': strategy
+        })
+    
+    print(f"Built {len(pairs)} preference pairs")
+    return pairs
 
 class SonnetGPT(nn.Module):
   """Your GPT-2 Model designed for paraphrase detection."""
@@ -132,6 +200,31 @@ def save_model(model, optimizer, args, filepath):
   torch.save(save_info, filepath)
   print(f"save the model to {filepath}")
 
+def compute_log_prob(model, input_ids, attention_mask):
+    """Compute sum of log probs for the sequence."""
+    logits = model(input_ids, attention_mask)
+    log_probs = F.log_softmax(logits, dim=-1)
+    token_log_probs = log_probs[:, :-1].gather(
+        dim=-1,
+        index=input_ids[:, 1:].unsqueeze(-1)
+    ).squeeze(-1)
+    return (token_log_probs * attention_mask[:, 1:].float()).sum(dim=-1)
+
+
+def simpo_loss(model, winner_ids, winner_mask, loser_ids, loser_mask, beta=2.0, gamma=0.5):
+    """SimPO loss - no reference model needed."""
+    logp_w = compute_log_prob(model, winner_ids, winner_mask)
+    logp_l = compute_log_prob(model, loser_ids, loser_mask)
+    
+    len_w = winner_mask.sum(dim=-1).float()
+    len_l = loser_mask.sum(dim=-1).float()
+    
+    # length normalized rewards
+    reward_w = (beta / len_w) * logp_w
+    reward_l = (beta / len_l) * logp_l
+    
+    loss = -F.logsigmoid(reward_w - reward_l - gamma).mean()
+    return loss
 
 def train(args):
   """Train GPT-2 for paraphrase detection on the Quora dataset."""
@@ -194,6 +287,70 @@ def train(args):
         #encoding = model.tokenizer(batch[1], return_tensors='pt', padding=True, truncation=True).to(device)
         #output = model.generate(encoding['input_ids'], temperature=args.temperature, top_p=args.top_p)
         #print(f'{batch[1]}{output[1]}\n\n')
+def train_simpo(args, pairs):
+    """Fine-tune with SimPO on top of best checkpoint using LoRA."""
+    device = torch.device('cuda') if args.use_gpu else torch.device('cpu')
+    
+    # load best checkpoint
+    saved = torch.load('25_gpt2-large-50-1e-05-sonnet.pt', weights_only=False)
+    model = SonnetGPT(saved['args'])
+    model.load_state_dict(saved['model'])
+    
+    # freeze base, add LoRA for SimPO fine-tuning
+    for param in model.gpt.parameters():
+        param.requires_grad = False
+    for layer in model.gpt.gpt_layers:
+        attn = layer.self_attention
+        attn.query = LoraLayer(attn.query, rank=16, alpha=32)
+        attn.value = LoraLayer(attn.value, rank=16, alpha=32)
+    
+    model = model.to(device)
+    optimizer = AdamW(
+        filter(lambda p: p.requires_grad, model.parameters()), 
+        lr=1e-4  # higher lr for LoRA
+    )
+    
+    print(f"Training SimPO on {len(pairs)} preference pairs")
+    
+    for epoch in range(args.simpo_epochs):
+        model.train()
+        random.shuffle(pairs)
+        total_loss = 0
+        num_batches = 0
+        
+        for pair in pairs:
+            # tokenize winner and loser
+            winner_enc = model.tokenizer(
+                pair['winner'], 
+                return_tensors='pt',
+                padding=True,
+                truncation=True,
+                max_length=256
+            ).to(device)
+            
+            loser_enc = model.tokenizer(
+                pair['loser'],
+                return_tensors='pt', 
+                padding=True,
+                truncation=True,
+                max_length=256
+            ).to(device)
+            
+            optimizer.zero_grad()
+            loss = simpo_loss(
+                model,
+                winner_enc['input_ids'], winner_enc['attention_mask'],
+                loser_enc['input_ids'], loser_enc['attention_mask']
+            )
+            loss.backward()
+            optimizer.step()
+            
+            total_loss += loss.item()
+            num_batches += 1
+        
+        avg_loss = total_loss / num_batches
+        print(f"SimPO Epoch {epoch}: loss {avg_loss:.3f}")
+        save_model(model, optimizer, args, f'{epoch}_simpo_{args.filepath}')
 
 @torch.no_grad()
 def generate_submission_sonnets(args):
@@ -252,6 +409,11 @@ def get_args():
     parser.add_argument("--lora_rank", type=int, default=16)
     parser.add_argument("--lora_alpha", type=int, default=32)
 
+    # SimPO
+
+    parser.add_argument("--simpo_epochs", type=int, default=5)
+    parser.add_argument("--run_simpo", action='store_true')
+
     args = parser.parse_args()
     return args
 
@@ -274,7 +436,6 @@ def add_arguments(args):
     raise Exception(f'{args.model_size} is not supported.')
   return args
 
-
 if __name__ == "__main__":
     args = get_args()
     if args.use_lora:
@@ -282,5 +443,27 @@ if __name__ == "__main__":
     else:
         args.filepath = f'{args.model_size}-{args.epochs}-{args.lr}-sonnet.pt'
     seed_everything(args.seed)
-    train(args)
+    
+    if args.run_simpo:
+        # build pairs then train simpo
+        args.filepath = f'{args.model_size}-simpo-{args.simpo_epochs}-{args.lr}-sonnet.pt'
+        saved = torch.load('25_gpt2-large-50-1e-05-sonnet.pt', weights_only=False)
+        temp_model = SonnetGPT(saved['args'])
+        temp_model.load_state_dict(saved['model'])
+        temp_model = temp_model.to(torch.device('cuda' if args.use_gpu else 'cpu'))
+        temp_model.eval()
+        
+        pairs = build_preference_pairs(
+            args.sonnet_path, 
+            temp_model, 
+            temp_model.tokenizer,
+            torch.device('cuda' if args.use_gpu else 'cpu')
+        )
+        del temp_model
+        torch.cuda.empty_cache()
+        
+        train_simpo(args, pairs)
+    else:
+        train(args)
+    
     generate_submission_sonnets(args)
