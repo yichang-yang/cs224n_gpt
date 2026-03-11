@@ -31,6 +31,7 @@ from modules.attention import LoraLayer
 from optimizer import AdamW
 import random
 from collections import defaultdict
+from itertools import groupby
 
 TQDM_DISABLE = False
 
@@ -328,14 +329,15 @@ def train_simpo(args, pairs):
     
     for epoch in range(args.simpo_epochs):
         model.train()
-        random.shuffle(pairs)
         total_loss = 0
         num_batches = 0
         
-        # replace the single-pair loop with batched processing
+        # sort pairs by strategy so same-length corruptions are batched together
+        pairs_sorted = sorted(pairs, key=lambda x: x['strategy'])
+
         batch_size = 8
-        for i in range(0, len(pairs), batch_size):
-            batch_pairs = pairs[i:i+batch_size]
+        for i in range(0, len(pairs_sorted), batch_size):
+            batch_pairs = pairs_sorted[i:i+batch_size]
             
             winner_enc = model.tokenizer(
                 [p['winner'] for p in batch_pairs],
@@ -353,7 +355,6 @@ def train_simpo(args, pairs):
                 max_length=256
             ).to(device)
             
-            # prompt len from first item in batch (all same length since same 3 lines)
             prompt_enc = model.tokenizer(
                 batch_pairs[0]['prompt'],
                 return_tensors='pt'
