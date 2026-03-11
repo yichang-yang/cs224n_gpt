@@ -427,10 +427,10 @@ def add_arguments(args):
 if __name__ == "__main__":
   args = get_args()
   seed_everything(args.seed)  # Fix the seed for reproducibility.
-  train(args)
+  # train(args)
   if args.dpo:
     torch.cuda.empty_cache()
     train_dpo(args)
-    generate_submission_sonnets(args, model_path='dpo_best.pt')
+    generate_submission_sonnets(args, model_path='train_best.pt')
   else:
     generate_submission_sonnets(args)
