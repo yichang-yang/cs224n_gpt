@@ -430,7 +430,7 @@ if __name__ == "__main__":
   # train(args)
   if args.dpo:
     torch.cuda.empty_cache()
-    train_dpo(args)
+    # train_dpo(args)
     generate_submission_sonnets(args, model_path='train_best.pt')
   else:
     generate_submission_sonnets(args)
