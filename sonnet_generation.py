@@ -152,15 +152,27 @@ def train_dpo(args):
   """DPO fine-tuning using training sonnets as chosen and model generations as rejected."""
   device = torch.device('cuda') if args.use_gpu else torch.device('cpu')
 
-  # Load the best SFT model as both policy and frozen reference
-  saved = torch.load('train_best.pt', weights_only=False)
+  # Always use train_best.pt as the frozen reference model (SFT baseline)
+  sft_saved = torch.load('train_best.pt', weights_only=False)
 
-  policy_model = SonnetGPT(saved['args'])
-  policy_model.load_state_dict(saved['model'])
+  # Policy starts from dpo_best.pt if it exists (already DPO-tuned), else from train_best.pt
+  dpo_exists = os.path.exists('dpo_best.pt')
+  if dpo_exists:
+    dpo_saved = torch.load('dpo_best.pt', weights_only=False)
+    best_dpo_loss = dpo_saved.get('best_loss', float('inf'))
+    policy_start = dpo_saved
+    print(f"Resuming policy from dpo_best.pt (DPO loss {best_dpo_loss:.3f})")
+  else:
+    best_dpo_loss = float('inf')
+    policy_start = sft_saved
+    print("Starting policy from train_best.pt (first DPO run)")
+
+  policy_model = SonnetGPT(sft_saved['args'])
+  policy_model.load_state_dict(policy_start['model'])
   policy_model = policy_model.to(device)
 
-  ref_model = SonnetGPT(saved['args'])
-  ref_model.load_state_dict(saved['model'])
+  ref_model = SonnetGPT(sft_saved['args'])
+  ref_model.load_state_dict(sft_saved['model'])
   ref_model = ref_model.to(device)
   ref_model.eval()
   for param in ref_model.parameters():
@@ -192,16 +204,8 @@ def train_dpo(args):
 
   # DPO training loop
   optimizer = AdamW(policy_model.parameters(), lr=args.lr * 0.1)
-
-  # Resume DPO from checkpoint if it exists
-  best_dpo_loss = float('inf')
-  if os.path.exists('dpo_best.pt'):
-    print("Resuming DPO from dpo_best.pt")
-    dpo_saved = torch.load('dpo_best.pt', weights_only=False)
-    policy_model.load_state_dict(dpo_saved['model'])
+  if dpo_exists:
     optimizer.load_state_dict(dpo_saved['optim'])
-    best_dpo_loss = dpo_saved.get('best_loss', float('inf'))
-    print(f"  -> Best DPO loss so far: {best_dpo_loss:.3f}")
 
   policy_model.train()
 
@@ -251,7 +255,7 @@ def train_dpo(args):
     print(f"DPO Epoch {epoch}: loss :: {dpo_loss:.3f}")
     if dpo_loss < best_dpo_loss:
       best_dpo_loss = dpo_loss
-      save_model(policy_model, optimizer, saved['args'], 'dpo_best.pt', best_loss=best_dpo_loss)
+      save_model(policy_model, optimizer, sft_saved['args'], 'dpo_best.pt', best_loss=best_dpo_loss)
       print(f"  -> New best DPO model saved (loss {best_dpo_loss:.3f})")
 
 
