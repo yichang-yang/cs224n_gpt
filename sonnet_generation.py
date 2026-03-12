@@ -326,6 +326,18 @@ def train_simpo(args, pairs):
     )
     
     print(f"Training SimPO on {len(pairs)} preference pairs")
+
+    # NEW: resume from simpo checkpoint if provided
+    start_epoch = 0
+    if args.checkpoint is not None:
+        print(f"Resuming SimPO from {args.checkpoint}")
+        simpo_saved = torch.load(args.checkpoint, weights_only=False)
+        model.load_state_dict(simpo_saved['model'])
+        optimizer.load_state_dict(simpo_saved['optim'])
+        start_epoch = int(args.checkpoint.split('_')[0]) + 1
+        del simpo_saved
+        torch.cuda.empty_cache()
+        print(f"Resuming from SimPO epoch {start_epoch}")
     
     for epoch in range(args.simpo_epochs):
         model.train()
