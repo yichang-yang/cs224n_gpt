@@ -33,6 +33,8 @@ import random
 from collections import defaultdict
 from itertools import groupby
 
+from sacrebleu.metrics import CHRF
+
 TQDM_DISABLE = False
 
 
@@ -89,13 +91,13 @@ def corrupt_sonnet(lines, strategy):
                     result[i] = ' '.join(words)
         return result
     
-def build_preference_pairs(sonnets_path):
+def build_preference_pairs(sonnets_path, model, device):
+    chrf = CHRF()
     pairs = []
     
     with open(sonnets_path, 'r') as f:
         content = f.read()
     
-    # parse into individual sonnets
     raw_sonnets = []
     current = []
     for line in content.split('\n'):
@@ -108,22 +110,51 @@ def build_preference_pairs(sonnets_path):
     if len(current) >= 14:
         raw_sonnets.append(current[:14])
     
-    print(f"Loaded {len(raw_sonnets)} sonnets for corruption")
+    print(f"Loaded {len(raw_sonnets)} sonnets, generating candidates...")
     
-    strategies = ['shuffle', 'truncate', 'repeat', 'extra_lines', 'wrong_ending']
+    model.eval()
+    num_candidates = 4
+    
     for sonnet_lines in raw_sonnets:
-        winner = '\n'.join(sonnet_lines)
-        for strategy in strategies:  # one pair per strategy instead of random
-            corrupted = corrupt_sonnet(sonnet_lines, strategy)
-            loser = '\n'.join(corrupted)
+        prompt = '\n'.join(sonnet_lines[:3])
+        reference = '\n'.join(sonnet_lines)
+        
+        candidates = []
+        encoding = model.tokenizer(
+            prompt,
+            return_tensors='pt',
+            padding=False,
+            truncation=True
+        ).to(device)
+        
+        # generate multiple candidates at different temperatures
+        for temp in [0.6, 0.7, 0.8, 0.9]:
+            with torch.no_grad():
+                _, generated = model.generate(
+                    encoding['input_ids'],
+                    temperature=temp,
+                    top_p=0.9
+                )
+            score = chrf.sentence_score(generated, [reference]).score
+            candidates.append((generated, score))
+        
+        # sort by chrf score
+        candidates.sort(key=lambda x: x[1], reverse=True)
+        
+        winner_text, winner_score = candidates[0]
+        loser_text, loser_score = candidates[-1]
+        
+        # only add pair if there's a meaningful score difference
+        if winner_score - loser_score > 2.0:
             pairs.append({
-                'prompt': '\n'.join(sonnet_lines[:3]),
-                'winner': winner,
-                'loser': loser,
-                'strategy': strategy
+                'prompt': prompt,
+                'winner': winner_text,
+                'loser': loser_text,
+                'strategy': 'sample_and_rank'
             })
     
     print(f"Built {len(pairs)} preference pairs")
+    model.train()
     return pairs
 
 class SonnetGPT(nn.Module):
@@ -302,32 +333,30 @@ def train(args):
         #output = model.generate(encoding['input_ids'], temperature=args.temperature, top_p=args.top_p)
         #print(f'{batch[1]}{output[1]}\n\n')
         
-def train_simpo(args, pairs):
-    """Fine-tune with SimPO on top of best checkpoint using LoRA."""
+def train_simpo(args, pairs=None):
+    args = add_arguments(args)
     device = torch.device('cuda') if args.use_gpu else torch.device('cpu')
     
-    # load best checkpoint
+    # load base checkpoint
     saved = torch.load('25_gpt2-large-50-1e-05-sonnet.pt', weights_only=False)
     model = SonnetGPT(saved['args'])
     model.load_state_dict(saved['model'])
     
-    # freeze base, add LoRA for SimPO fine-tuning
+    # freeze base, add LoRA
     for param in model.gpt.parameters():
         param.requires_grad = False
     for layer in model.gpt.gpt_layers:
         attn = layer.self_attention
-        attn.query = LoraLayer(attn.query, rank=16, alpha=32)
-        attn.value = LoraLayer(attn.value, rank=16, alpha=32)
+        attn.query = LoraLayer(attn.query, rank=args.lora_rank, alpha=args.lora_alpha)
+        attn.value = LoraLayer(attn.value, rank=args.lora_rank, alpha=args.lora_alpha)
     
     model = model.to(device)
     optimizer = AdamW(
-        filter(lambda p: p.requires_grad, model.parameters()), 
+        filter(lambda p: p.requires_grad, model.parameters()),
         lr=args.simpo_lr
     )
     
-    print(f"Training SimPO on {len(pairs)} preference pairs")
-
-    # NEW: resume from simpo checkpoint if provided
+    # resume from checkpoint if provided
     start_epoch = 0
     if args.checkpoint is not None:
         print(f"Resuming SimPO from {args.checkpoint}")
@@ -339,15 +368,23 @@ def train_simpo(args, pairs):
         torch.cuda.empty_cache()
         print(f"Resuming from SimPO epoch {start_epoch}")
     
-    for epoch in range(args.simpo_epochs):
+    batch_size = 8
+    regenerate_every = 5  # regenerate pairs every N epochs
+    
+    for epoch in range(start_epoch, args.simpo_epochs):
+        
+        # regenerate pairs every N epochs using current model
+        if epoch % regenerate_every == 0:
+            print(f"Generating preference pairs with current model (epoch {epoch})...")
+            pairs = build_preference_pairs(args.sonnet_path, model, device)
+        
         model.train()
         total_loss = 0
         num_batches = 0
         
-        # sort pairs by strategy so same-length corruptions are batched together
+        # sort by strategy so same-length sequences are batched together
         pairs_sorted = sorted(pairs, key=lambda x: x['strategy'])
-
-        batch_size = 8
+        
         for i in range(0, len(pairs_sorted), batch_size):
             batch_pairs = pairs_sorted[i:i+batch_size]
             
@@ -390,10 +427,10 @@ def train_simpo(args, pairs):
             total_loss += loss.item()
             num_batches += 1
         
-        avg_loss = total_loss / num_batches
+        avg_loss = total_loss / num_batches if num_batches > 0 else 0
         print(f"SimPO Epoch {epoch}: loss {avg_loss:.3f}")
-        # replace the save line
-        if (epoch + 1) % 5 == 0 and epoch > 0:
+        
+        if (epoch % 5 == 0 and epoch > 0) or epoch == args.simpo_epochs - 1:
             save_model(model, optimizer, args, f'{epoch}_simpo_{args.filepath}')
 
 @torch.no_grad()
@@ -496,8 +533,7 @@ if __name__ == "__main__":
     seed_everything(args.seed)
     
     if args.run_simpo:
-        pairs = build_preference_pairs(args.sonnet_path)
-        train_simpo(args, pairs)
+        train_simpo(args) 
     else:
         train(args)
         generate_submission_sonnets(args)
