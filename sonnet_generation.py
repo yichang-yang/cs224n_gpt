@@ -145,7 +145,7 @@ def build_preference_pairs(sonnets_path, model, device):
         loser_text, loser_score = candidates[-1]
         
         # only add pair if there's a meaningful score difference
-        if winner_score - loser_score > 2.0:
+        if winner_score - loser_score > 0.5:
             pairs.append({
                 'prompt': prompt,
                 'winner': winner_text,
