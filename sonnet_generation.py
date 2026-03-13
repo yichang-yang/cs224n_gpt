@@ -138,11 +138,16 @@ def build_preference_pairs(sonnets_path, model, device):
             score = chrf.sentence_score(generated, [reference]).score
             candidates.append((generated, score))
         
+        print(f"  reference length: {len(sonnet_lines)} lines")
+        print(f"  generated sample: {candidates[0][0][:50]}")
+        
         # sort by chrf score
         candidates.sort(key=lambda x: x[1], reverse=True)
         
         winner_text, winner_score = candidates[0]
         loser_text, loser_score = candidates[-1]
+
+        print(f"  gap={winner_score - loser_score:.2f}, winner={winner_score:.2f}, loser={loser_score:.2f}")
         
         # only add pair if there's a meaningful score difference
         if winner_score - loser_score > 0.5:
