@@ -6,7 +6,7 @@ from torch import nn
 
 
 class LoraLayer(nn.Module):
-  def __init__(self, cross_att_matrix, rank = 8, alpha = 8):
+  def __init__(self, cross_att_matrix, rank=8, alpha=8):
     super().__init__()
     self.cross_att_matrix = cross_att_matrix
     # self.cross_att_matrix.weight.requires_grad = False
@@ -19,9 +19,7 @@ class LoraLayer(nn.Module):
     nn.init.zeros_(self.B.weight)
   
   def forward(self, x):
-
     ans = self.cross_att_matrix(x) + self.B(self.A(x)) * (self.alpha / self.rank)
-
     return ans
 
 

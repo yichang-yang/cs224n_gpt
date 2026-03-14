@@ -10,7 +10,7 @@ Running:
   `python paraphrase_detection.py --use_gpu`
 trains and evaluates your ParaphraseGPT model and writes the required submission files.
 '''
-
+import os
 import argparse
 import random
 import torch
@@ -62,10 +62,10 @@ class ParaphraseGPT(nn.Module):
     #   for param in layer.parameters():
     #     param.requires_grad = (idx >= 18)
 
-    for layer in self.gpt.gpt_layers[-4:]:
+    for layer in self.gpt.gpt_layers[-8:]:
       attn = layer.self_attention
-      attn.query = LoraLayer(attn.query, alpha = 8, rank = 8)
-      attn.value = LoraLayer(attn.value, alpha = 8, rank = 8)
+      attn.query = LoraLayer(attn.query, alpha = 16, rank = 16)
+      attn.value = LoraLayer(attn.value, alpha = 16, rank = 16)
 
   def forward(self, input_ids, attention_mask):
     """
@@ -122,9 +122,29 @@ def train(args):
   model = ParaphraseGPT(args)
   model = model.to(device)
 
+  checkpoint_path = '/content/drive/MyDrive/224n/cs224n_gpt/10-1e-05-paraphrase.pt'
+  if os.path.exists(checkpoint_path):
+      print(f"Loading checkpoint from {checkpoint_path}")
+      saved = torch.load(checkpoint_path, weights_only=False)
+      model.load_state_dict(saved['model'])
+      print("Checkpoint loaded, continuing training")
+
   lr = args.lr
-  optimizer = AdamW(model.parameters(), lr=lr, weight_decay=0.)
+  optimizer = AdamW(model.parameters(), lr=lr, weight_decay=0.01)
+
+  # Add scheduler
+  # total_steps = len(para_train_dataloader) * args.epochs
+  # warmup_steps = total_steps // 10  # 10% warmup
+    
+  # from transformers import get_linear_schedule_with_warmup
+  # scheduler = get_linear_schedule_with_warmup(
+  #     optimizer,
+  #     num_warmup_steps=warmup_steps,
+  #     num_training_steps=total_steps
+  # )
+  
   best_dev_acc = 0
+  epochs_without_improvement = 0
 
   # Run for the specified number of epochs.
   for epoch in range(args.epochs):
@@ -141,17 +161,17 @@ def train(args):
       # Compute the loss, gradients, and update the model's parameters.
       optimizer.zero_grad()
       logits = model(b_ids, b_mask)
-      preds = torch.argmax(logits, dim=1)
-      loss = F.cross_entropy(logits, labels, reduction='mean', label_smoothing=0.1)
-
+      loss = F.cross_entropy(logits, labels, reduction='mean', label_smoothing=0)
+      loss.backward()
+      torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+      optimizer.step()
+      # scheduler.step()
       # Contrastive loss
       # emb1 = model.gpt(batch['token_ids_s1'].to(device), batch['attention_mask_s1'].to(device))['last_token']
       # emb2 = model.gpt(batch['token_ids_s2'].to(device), batch['attention_mask_s2'].to(device))['last_token']
       # cosine_sim = F.cosine_similarity(emb1, emb2)
       # contrastive_loss = F.mse_loss(cosine_sim, (2 * labels.float() - 1))  # paraphrase is 1, non-paraphrase is -1
       # loss = loss + 0.1 * contrastive_loss
-      loss.backward()
-      optimizer.step()
 
       train_loss += loss.item()
       num_batches += 1
@@ -163,12 +183,21 @@ def train(args):
     # trainable = sum(p.numel() for p in model.parameters() if p.requires_grad)
     # total = sum(p.numel() for p in model.parameters())
     # print(f"Trainable: {trainable:,} / {total:,} ({100*trainable/total:.2f}%)")
-
+    
+    
     if dev_acc > best_dev_acc:
-      best_dev_acc = dev_acc
-      save_model(model, optimizer, args, args.filepath)
+        best_dev_acc = dev_acc
+        epochs_without_improvement = 0
+        save_model(model, optimizer, args, args.filepath)
+    else:
+        epochs_without_improvement += 1
+        if epochs_without_improvement >= 3:
+            print(f"Early stopping at epoch {epoch}")
+            break
 
-    print(f"Epoch {epoch}: train loss :: {train_loss :.3f}, dev acc :: {dev_acc :.3f}")
+     # Print current lr so you can monitor it
+    current_lr = optimizer.param_groups[0]['lr']
+    print(f"Epoch {epoch}: train loss :: {train_loss :.3f}, dev acc :: {dev_acc :.3f}, lr :: {current_lr:.2e}")
 
 
 @torch.no_grad()

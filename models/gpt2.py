@@ -109,7 +109,8 @@ class GPT2Model(GPTPreTrainedModel):
     #hidden: [8, 768] word_embedding[50257, 768]
     ans = torch.matmul(hidden_state, self.word_embedding.weight.T)
   
-    return ans[:, [3919, 8505]]
+    # return ans[:, [3919, 8505]]
+    return ans
     
 
 
