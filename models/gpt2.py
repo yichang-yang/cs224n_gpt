@@ -50,6 +50,7 @@ class GPT2Model(GPTPreTrainedModel):
     # input_ids = [batch_size, seq_len]
 
     inputs_embeds = self.word_embedding(input_ids)
+    
     pos_ids = self.position_ids[:, :seq_length]
     pos_embeds = self.pos_embedding(pos_ids)
 

@@ -53,25 +53,35 @@ class AdamW(Optimizer):
                 m = state["m_t"]
                 v = state["v_t"]
 
-
-                # Access hyperparameters from the `group` dictionary.
-                alpha = group["lr"]
                 beta_1, beta_2 = group["betas"]
                 eps = group["eps"]
-                weight_decay = group['weight_decay']
+                
 
-                # calculation
                 m_t = beta_1 * m + (1 - beta_1) * grad
                 v_t = beta_2 * v + (1 - beta_2) * grad * grad
 
+                alpha = group["lr"]
+
                 if group["correct_bias"]:
-                    alpha_t = alpha * ((1 - (beta_2 ** t)) ** 0.5) / (1 - (beta_1 ** t))
+                    a = (1 - (beta_2 ** t)) ** 0.5
+                    b = (1 - (beta_1 ** t))
+
+                    alpha_t = alpha * a / b
                 else:
                     alpha_t = alpha
 
-                p.data.addcdiv_(m_t, v_t.sqrt().add_(eps), value = -alpha_t)  
+                constant = alpha_t * -1
+
+                # p.data.addcdiv_(m_t, v_t.sqrt().add_(eps), value = constant) 
+
+                weight_decay = group['weight_decay'] 
+
+                p.data.addcdiv_(m_t, v_t.sqrt().add_(eps), value = constant) 
+
 
                 p.data *= (1 - alpha * weight_decay)
+
+
 
                 state["m_t"] = m_t
                 state["v_t"] = v_t

@@ -15,6 +15,7 @@ class LoraLayer(nn.Module):
     self.alpha = alpha
     self.A = nn.Linear(self.cross_att_matrix.in_features, rank, bias=False)
     self.B = nn.Linear(rank, self.cross_att_matrix.out_features, bias=False)
+    
     nn.init.kaiming_uniform_(self.A.weight)
     nn.init.zeros_(self.B.weight)
   

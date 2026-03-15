@@ -15,6 +15,8 @@ import argparse
 import random
 import torch
 
+# from transformers import get_linear_schedule_with_warmup
+
 import numpy as np
 import torch.nn.functional as F
 
@@ -88,7 +90,6 @@ class ParaphraseGPT(nn.Module):
     return ans
 
 
-
 def save_model(model, optimizer, args, filepath):
   save_info = {
     'model': model.state_dict(),
@@ -121,7 +122,8 @@ def train(args):
   args = add_arguments(args)
   model = ParaphraseGPT(args)
   model = model.to(device)
-
+  
+  # need to uncomment the check point
   checkpoint_path = '/content/drive/MyDrive/224n/cs224n_gpt/10-1e-05-paraphrase.pt'
   if os.path.exists(checkpoint_path):
       print(f"Loading checkpoint from {checkpoint_path}")
@@ -136,7 +138,7 @@ def train(args):
   # total_steps = len(para_train_dataloader) * args.epochs
   # warmup_steps = total_steps // 10  # 10% warmup
     
-  # from transformers import get_linear_schedule_with_warmup
+  
   # scheduler = get_linear_schedule_with_warmup(
   #     optimizer,
   #     num_warmup_steps=warmup_steps,
@@ -144,7 +146,7 @@ def train(args):
   # )
   
   best_dev_acc = 0
-  epochs_without_improvement = 0
+  epochs_imp = 0
 
   # Run for the specified number of epochs.
   for epoch in range(args.epochs):
@@ -187,17 +189,16 @@ def train(args):
     
     if dev_acc > best_dev_acc:
         best_dev_acc = dev_acc
-        epochs_without_improvement = 0
+        epochs_imp = 0
         save_model(model, optimizer, args, args.filepath)
     else:
-        epochs_without_improvement += 1
-        if epochs_without_improvement >= 3:
+        epochs_imp += 1
+        if epochs_imp >= 3:
             print(f"Early stopping at epoch {epoch}")
             break
 
-     # Print current lr so you can monitor it
-    current_lr = optimizer.param_groups[0]['lr']
-    print(f"Epoch {epoch}: train loss :: {train_loss :.3f}, dev acc :: {dev_acc :.3f}, lr :: {current_lr:.2e}")
+    cur_lr = optimizer.param_groups[0]['lr']
+    print(f"Epoch {epoch}: train loss :: {train_loss :.3f}, dev acc :: {dev_acc :.3f}, lr :: {cur_lr:.2e}")
 
 
 @torch.no_grad()
